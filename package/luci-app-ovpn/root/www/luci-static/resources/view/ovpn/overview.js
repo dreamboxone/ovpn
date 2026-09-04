@@ -21,6 +21,7 @@ function badge(st) {
 	else if (st.status == 'selecting')   { text = _('Finding the fastest server…'); colour = '#f59e0b'; }
 	else if (st.status == 'starting')    { text = _('Starting…'); colour = '#f59e0b'; }
 	else if (st.status == 'failed')      { text = _('No server could be reached'); colour = '#ef4444'; }
+	else if (st.status == 'idle')        { text = _('Ready to connect'); colour = '#94a3b8'; }
 	else if (st.running)                 { text = _('Connecting…'); colour = '#f59e0b'; }
 	else                                 { text = _('Disconnected'); colour = '#94a3b8'; }
 
@@ -54,8 +55,14 @@ function render(st) {
 	var busy = (st.status == 'selecting' || st.status == 'starting');
 	var connect = document.getElementById('ovpn-connect');
 	var disconnect = document.getElementById('ovpn-disconnect');
-	if (connect)    connect.disabled = !!st.enabled || busy;
-	if (disconnect) disconnect.disabled = !st.enabled && !busy;
+	/* While a selection is running neither button may be pressed: the work
+	   is already in flight and a second press would start a second one. */
+	if (connect)    connect.disabled = busy || !!st.enabled;
+	if (disconnect) disconnect.disabled = busy || !st.enabled;
+
+	setNode('ovpn-why', busy
+		? _('Every server is being tried with a real request, and the fastest one wins. This takes about half a minute.')
+		: '');
 }
 
 function act(name) {
@@ -66,7 +73,14 @@ function act(name) {
 
 return view.extend({
 	load: function() {
-		return callState().catch(function() { return {}; });
+		/* Start measuring as the page opens, so that by the time the reader
+		   has decided to press Connect the answer is already there. Nothing
+		   is hidden: the badge says what is happening while it happens. The
+		   backend ignores this when a selection already exists. */
+		return callAction('prepare')
+			.catch(function() {})
+			.then(function() { return callState(); })
+			.catch(function() { return {}; });
 	},
 
 	render: function(st) {
@@ -77,6 +91,10 @@ return view.extend({
 			E('div', { 'style': 'margin-bottom:14px' }, [
 				E('span', { 'id': 'ovpn-state' }, '-')
 			]),
+			E('div', {
+				'id': 'ovpn-why',
+				'style': 'margin:-6px 0 12px 0;opacity:.7;font-size:13px'
+			}, ''),
 			line(_('Server'), 'ovpn-server'),
 			line(_('Latency'), 'ovpn-latency'),
 			E('div', { 'style': 'margin-top:16px;display:flex;gap:10px' }, [

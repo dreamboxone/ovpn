@@ -4,19 +4,25 @@
 # Copyright (C) 2026 dreamboxone <https://t.me/routekernel1>
 # Part of ovpn - https://github.com/dreamboxone/ovpn
 #
-# ovpn-connect - what the Connect button actually does.
+# ovpn-connect - choose a server, and optionally connect through it.
 #
-# Choosing a server means a timed request through each of a hundred of them,
-# which takes a minute or two. That cannot happen inside start_service: procd
+#   ovpn-connect            select, then start the tunnel   (the Connect button)
+#   ovpn-connect prepare    select only                     (the page was opened)
+#
+# Choosing means a timed request through each of a hundred servers, which
+# takes about half a minute. That cannot happen inside start_service: procd
 # would be held for the whole measurement, and the service it is starting
-# would be neither started nor failed while it waited. So the measuring
-# happens here, and the service start is the quick step at the end.
+# would be neither started nor failed while it waited.
 
 set -e
 
 STATE_DIR=/var/run/ovpn
 STATUS="$STATE_DIR/status"
+LOCK="$STATE_DIR/lock"
+BEST="$STATE_DIR/best.json"
 UPDATE=/usr/libexec/ovpn-update
+
+MODE="${1:-connect}"
 
 mkdir -p "$STATE_DIR"
 
@@ -24,16 +30,43 @@ mkdir -p "$STATE_DIR"
 # exactly like a button that did nothing.
 say() { echo "$1" > "$STATUS"; }
 
-trap 'say failed' INT TERM
+# mkdir is atomic, so two page loads at once cannot both start measuring.
+if ! mkdir "$LOCK" 2>/dev/null; then
+	# A stale directory would wedge this for good, so only respect a lock
+	# that something is actually holding.
+	if [ -f "$LOCK/pid" ] && kill -0 "$(cat "$LOCK/pid" 2>/dev/null)" 2>/dev/null; then
+		exit 0
+	fi
+	rm -rf "$LOCK"
+	mkdir "$LOCK" 2>/dev/null || exit 0
+fi
+echo $$ > "$LOCK/pid"
+
+cleanup() { rm -rf "$LOCK"; }
+trap 'say failed; cleanup' INT TERM
+trap cleanup EXIT
+
+# Opening the page must not throw away a selection that is already good, and
+# must never disturb a tunnel that is already up.
+if [ "$MODE" = "prepare" ] && [ -s "$BEST" ]; then
+	exit 0
+fi
 
 say selecting
-if "$UPDATE" update >/dev/null 2>&1; then
-	say starting
-	if /etc/init.d/ovpn restart >/dev/null 2>&1; then
-		say ready
-	else
-		say failed
-	fi
+if ! "$UPDATE" update >/dev/null 2>&1; then
+	say failed
+	exit 0
+fi
+
+if [ "$MODE" = "prepare" ]; then
+	# ready to connect, but nothing is running and nothing was changed
+	say idle
+	exit 0
+fi
+
+say starting
+if /etc/init.d/ovpn restart >/dev/null 2>&1; then
+	say ready
 else
 	say failed
 fi

@@ -37,7 +37,11 @@ SUB_URL="https://raw.githubusercontent.com/0xRadikal/Free-v2ray-Configs/main/top
 # reachable without the tunnel: a 204 with no body means the whole path worked.
 TEST_URL="http://www.gstatic.com/generate_204"
 TEST_TIMEOUT=6
-TEST_PARALLEL=12
+# `wait` waits for the whole batch, so a batch costs whatever its slowest
+# member costs - and on a filtered line most members spend the full timeout.
+# Fewer, larger batches is therefore the whole difference between half a
+# minute and a minute. The processes are almost entirely idle, waiting.
+TEST_PARALLEL=25
 BASE_PORT=24000
 
 log() { logger -t ovpn "$*"; [ -t 1 ] && echo "$*" >&2 || true; }

@@ -50,6 +50,12 @@ scp ovpn_*.ipk luci-app-ovpn_*.ipk root@192.168.1.1:/tmp/
 ssh root@192.168.1.1 'opkg update && opkg install /tmp/ovpn_*.ipk /tmp/luci-app-ovpn_*.ipk'
 ```
 
+**The router needs working internet while you install.** Three things ovpn
+relies on are not part of a stock OpenWrt image — `kmod-nft-tproxy`, `curl`
+and `ip-full` — and the package manager fetches them from the OpenWrt
+repository as it installs. Do this step on a connection that works, before
+you need the tunnel.
+
 Then open LuCI → **Services → ovpn**.
 
 Nothing runs after installation. The tunnel stays off until you press

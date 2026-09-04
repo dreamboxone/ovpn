@@ -51,6 +51,11 @@ scp ovpn_*.ipk luci-app-ovpn_*.ipk root@192.168.1.1:/tmp/
 opkg update && opkg install /tmp/ovpn_*.ipk /tmp/luci-app-ovpn_*.ipk
 ```
 
+**موقع نصب، روتر باید اینترنت داشته باشد.** سه چیزی که ovpn به آن‌ها تکیه
+می‌کند در ایمیج خام OpenWrt نیستند — `kmod-nft-tproxy` و `curl` و `ip-full` —
+و مدیر بسته موقع نصب آن‌ها را از مخزن OpenWrt می‌گیرد. این مرحله را روی
+اتصالی انجام بده که کار می‌کند، قبل از اینکه به تونل نیاز داشته باشی.
+
 بعد در LuCI برو به **Services ← ovpn**.
 
 بعد از نصب هیچ چیزی اجرا نمی‌شود. تونل خاموش می‌ماند تا وقتی **Connect** را
