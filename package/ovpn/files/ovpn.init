@@ -33,7 +33,7 @@ start_service() {
 	# would be neither started nor failed while it waited. ovpn-connect does
 	# the measuring and then calls us. At boot there is a selection from last
 	# time, which is why the list is kept in /etc.
-	if [ ! -s "$STATE_DIR/best.json" ]; then
+	if [ ! -s /etc/ovpn/best.json ]; then
 		logger -t ovpn "no server selected - run ovpn-connect, or press Connect"
 		return 1
 	fi
@@ -68,7 +68,8 @@ start_service() {
 	# leave the network alone and say so.
 	n=0
 	while [ $n -lt 20 ]; do
-		netstat -lnt 2>/dev/null | grep -q ":$tproxy_port " && break
+		# /proc/net/tcp carries the local port in hex, so this needs no tools
+		grep -qi ":$(printf %04X "$tproxy_port") " /proc/net/tcp 2>/dev/null && break
 		n=$((n + 1))
 		sleep 1
 	done

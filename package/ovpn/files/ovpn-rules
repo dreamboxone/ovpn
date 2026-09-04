@@ -44,7 +44,12 @@ lan_devices() {
 			wan|wan6|wwan|loopback) continue ;;
 		esac
 		network_get_device dev "$iface" 2>/dev/null || dev=""
-		[ -n "$dev" ] && devs="$devs $dev"
+		# not `[ ... ] && devs=...`: that is the last command of the loop, so
+		# an interface with no device would end the loop non-zero and set -e
+		# would take the function with it - leaving no LAN devices at all
+		if [ -n "$dev" ]; then
+			devs="$devs $dev"
+		fi
 	done
 	[ -n "$devs" ] || devs="br-lan"
 	echo "$devs"
@@ -57,13 +62,29 @@ cmd_up() {
 	set -- $devs
 	[ "$#" -gt 0 ] || { echo "no LAN device found" >&2; exit 1; }
 
-	# policy routing: anything we mark is handed to the local tproxy socket
+	# Policy routing: anything we mark is handed to the local tproxy socket.
+	# Both of these have to actually take. Without them the rules below still
+	# load and xray still listens, so everything looks healthy from every
+	# angle, and not one packet arrives - which is the worst way for this to
+	# fail. busybox's cut-down ip cannot do either, which is why the package
+	# depends on ip-full.
 	ip rule add fwmark "$MARK" lookup 100 2>/dev/null || true
 	ip route add local 0.0.0.0/0 dev lo table 100 2>/dev/null || true
 
+	if ! ip rule list 2>/dev/null | grep -qi "$MARK"; then
+		echo "could not add the policy routing rule (is ip-full installed?)" >&2
+		exit 1
+	fi
+	if ! ip route show table 100 2>/dev/null | grep -q "^local"; then
+		echo "could not add the local route for table 100" >&2
+		exit 1
+	fi
+
 	iflist=""
 	for d in $devs; do
-		[ -n "$iflist" ] && iflist="$iflist, "
+		if [ -n "$iflist" ]; then
+			iflist="$iflist, "
+		fi
 		iflist="$iflist\"$d\""
 	done
 

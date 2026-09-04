@@ -19,7 +19,7 @@ set -e
 STATE_DIR=/var/run/ovpn
 STATUS="$STATE_DIR/status"
 LOCK="$STATE_DIR/lock"
-BEST="$STATE_DIR/best.json"
+BEST=/etc/ovpn/best.json
 UPDATE=/usr/libexec/ovpn-update
 
 MODE="${1:-connect}"
@@ -52,10 +52,29 @@ if [ "$MODE" = "prepare" ] && [ -s "$BEST" ]; then
 	exit 0
 fi
 
-say selecting
-if ! "$UPDATE" update >/dev/null 2>&1; then
-	say failed
-	exit 0
+# Opening the page measures; pressing Connect then finds the answer already
+# there. Measuring again would make the reader wait a second half minute for
+# a result that has not had time to change, which is the whole point of doing
+# it when the page opened.
+FRESH_SECONDS=3600
+fresh=0
+if [ -s "$BEST" ]; then
+	age=$(( $(date +%s) - $(date -r "$BEST" +%s 2>/dev/null || echo 0) ))
+	# an `a && b && c` line is a trap under set -e: when the test is false the
+	# line returns non-zero and takes the whole script with it
+	if [ "$age" -ge 0 ] && [ "$age" -lt "$FRESH_SECONDS" ]; then
+		fresh=1
+	fi
+fi
+
+if [ "$fresh" = "1" ]; then
+	say starting
+else
+	say selecting
+	if ! "$UPDATE" update >/dev/null 2>&1; then
+		say failed
+		exit 0
+	fi
 fi
 
 if [ "$MODE" = "prepare" ]; then
@@ -64,7 +83,6 @@ if [ "$MODE" = "prepare" ]; then
 	exit 0
 fi
 
-say starting
 if timeout 60 /etc/init.d/ovpn restart >/dev/null 2>&1; then
 	say ready
 else

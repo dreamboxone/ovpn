@@ -7,14 +7,35 @@
 # ovpn-mkconfig - write the Xray configuration for the selected server.
 #
 # Prints the configuration on stdout.
+#
+# Two things here are not obvious.
+#
+# The DNS inbound listens on 0.0.0.0, not on loopback: an nftables redirect
+# rewrites the destination to the address of the interface the query arrived
+# on and never to 127.0.0.1, so a loopback listener would receive nothing.
+#
+# And name lookups leave over TCP, not UDP. A free server list is mostly
+# vless and vmess over TCP, websocket or reality, and a great many of those
+# carry no UDP at all - so sending lookups out as UDP loses them completely
+# on the very servers this is built to use. A tunnel that carries every byte
+# except the name lookups looks, from the inside, like a tunnel where no site
+# opens. Xray's dns outbound answers the query itself from the servers below,
+# and reaches those over TCP through the tunnel.
 
 set -e
 
 STATE_DIR=/var/run/ovpn
-BEST="$STATE_DIR/best.json"
+BEST="${OVPN_BEST:-/etc/ovpn/best.json}"
 
-. /lib/functions.sh
-config_load ovpn 2>/dev/null || true
+# Off a router there is no UCI, and being able to run this anywhere is what
+# lets the build validate its own output against a real xray before anyone
+# installs it.
+if [ -r /lib/functions.sh ]; then
+	. /lib/functions.sh
+	config_load ovpn 2>/dev/null || true
+else
+	config_get() { eval "$1=\$4"; }
+fi
 config_get tproxy_port config tproxy_port 1082
 config_get dns_port    config dns_port    1053
 
@@ -39,9 +60,6 @@ cat <<EOF
     },
     {
       "tag": "dns-in",
-      // nftables redirect rewrites the destination to the address of the
-      // interface the query arrived on, never to loopback, so listening on
-      // 127.0.0.1 would receive nothing at all
       "listen": "0.0.0.0",
       "port": ${dns_port},
       "protocol": "dokodemo-door",
@@ -50,17 +68,18 @@ cat <<EOF
   ],
   "outbounds": [
 $(sed 's/^{/{"tag":"proxy",/' "$BEST"),
-    { "tag": "direct", "protocol": "freedom", "settings": { "domainStrategy": "UseIP" } },
-    { "tag": "block",  "protocol": "blackhole" }
+    { "tag": "direct",  "protocol": "freedom", "settings": { "domainStrategy": "UseIP" } },
+    { "tag": "dns-out", "protocol": "dns" },
+    { "tag": "block",   "protocol": "blackhole" }
   ],
   "dns": {
-    "servers": [ "1.1.1.1", "8.8.8.8" ],
+    "servers": [ "tcp://1.1.1.1", "tcp://8.8.8.8" ],
     "queryStrategy": "UseIPv4"
   },
   "routing": {
     "domainStrategy": "AsIs",
     "rules": [
-      { "type": "field", "inboundTag": [ "dns-in" ], "outboundTag": "proxy" },
+      { "type": "field", "inboundTag": [ "dns-in" ], "outboundTag": "dns-out" },
       { "type": "field", "protocol": [ "bittorrent" ], "outboundTag": "block" },
       {
         "type": "field",

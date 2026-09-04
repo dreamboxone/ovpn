@@ -58,6 +58,36 @@ jobs:
           # pipeline would notice a core that cannot run at all.
           ./prebuilt/x86_64/xray version
 
+      - name: Check the parser and the configuration it feeds
+        if: matrix.name == 'x86_64'
+        run: |
+          set -euo pipefail
+          # The list address lives in exactly one file and stays there, so
+          # read it back out rather than repeating it here.
+          sub=$(grep '^SUB_URL=' package/ovpn/files/ovpn-update | cut -d'"' -f2)
+          curl -fsSL --retry 3 -o list.txt "$sub"
+
+          awk -f package/ovpn/files/ovpn-parse < list.txt > cand.tsv
+          entries=$(grep -c . list.txt || true)
+          parsed=$(wc -l < cand.tsv)
+          echo "== parsed $parsed servers"
+          test "$parsed" -gt 0
+
+          # every outbound the parser emits has to be JSON xray will accept
+          cut -f3 cand.tsv | while read -r o; do
+            echo "$o" | python3 -c 'import json,sys; json.load(sys.stdin)'
+          done
+          echo "== every parsed outbound is valid JSON"
+
+          # and the configuration built around one of them has to satisfy the
+          # very binary that will run it - which is the check that catches a
+          # config that is shaped wrong long before a router does
+          head -1 cand.tsv | cut -f3 > best.json
+          OVPN_BEST="$PWD/best.json" sh package/ovpn/files/ovpn-mkconfig > cfg.json
+          python3 -c 'import json;d=json.load(open("cfg.json"));print("== config tags:", [o["tag"] for o in d["outbounds"]])'
+          ./prebuilt/x86_64/xray run -test -config cfg.json
+          echo "== xray accepts the generated configuration"
+
       - name: Fetch the apk tool from an OpenWrt SDK
         run: |
           set -euo pipefail

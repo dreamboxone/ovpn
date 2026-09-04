@@ -20,8 +20,11 @@ set -e
 STATE_DIR=/var/run/ovpn
 LIST=/etc/ovpn/servers.list          # survives reboots, so a boot needs no fetch
 CAND="$STATE_DIR/candidates.tsv"
-BEST="$STATE_DIR/best.json"
-BEST_META="$STATE_DIR/best.meta"
+# The selection lives beside the list, not in /var/run: that is tmpfs, so
+# a reboot would throw it away and the tunnel could not come back without
+# measuring a hundred servers first.
+BEST=/etc/ovpn/best.json
+BEST_META=/etc/ovpn/best.meta
 RESULTS="$STATE_DIR/results.tsv"
 ATTEMPTS="$STATE_DIR/attempts"
 STAMP=/etc/ovpn/last-update
@@ -120,6 +123,13 @@ build_test_config() {
 cmd_test() {
 	[ -s "$CAND" ] || cmd_parse || return 1
 
+	# A test instance left behind by an interrupted run still holds every one
+	# of these ports. The next run then cannot bind, every measurement fails,
+	# and the answer is "no server responded" for good - a failure that keeps
+	# itself alive and looks like the network.
+	kill $(pgrep -f "run -config $STATE_DIR/test.json") 2>/dev/null || true
+	sleep 1
+
 	cfg="$(build_test_config)"
 	XRAY="$(find_xray "$cfg")" || {
 		log "no xray on this router can run the generated configuration"
@@ -128,9 +138,16 @@ cmd_test() {
 
 	"$XRAY" run -config "$cfg" >/dev/null 2>&1 &
 	xpid=$!
+	# and this run must not leave one behind either, however it ends
+	trap 'kill "$xpid" 2>/dev/null; rm -f "$cfg"' EXIT INT TERM
 	# give the listeners a moment; without this the first few candidates
 	# would be scored on xray's startup rather than on their own latency
 	sleep 2
+
+	if ! kill -0 "$xpid" 2>/dev/null; then
+		log "the test instance did not start - ports busy, or a bad server entry"
+		return 1
+	fi
 
 	: > "$RESULTS"
 	: > "$ATTEMPTS"
