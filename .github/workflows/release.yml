@@ -108,6 +108,23 @@ jobs:
           file verify/ipk/data/usr/libexec/ovpn/xray
           grep -qx "Architecture: ${{ matrix.openwrt_arch }}" verify/ipk/control/control
 
+          # The web interface is a separate package and was going out
+          # unchecked: a menu file that never reached the router looks
+          # exactly like a green build.
+          rm -rf verifyl && mkdir -p verifyl/apk verifyl/ipk
+          "$APK_BIN" extract --destination verifyl/apk --allow-untrusted --no-chown dist/luci-app-ovpn-*.apk
+          tar -xzf dist/luci-app-ovpn_*_all.ipk -C verifyl/ipk
+          mkdir -p verifyl/ipk/data && tar -xzf verifyl/ipk/data.tar.gz -C verifyl/ipk/data
+          for base in verifyl/apk verifyl/ipk/data; do
+            test -s "$base/usr/share/luci/menu.d/luci-app-ovpn.json"
+            test -s "$base/usr/share/rpcd/acl.d/luci-app-ovpn.json"
+            test -s "$base/www/luci-static/resources/view/ovpn/overview.js"
+          done
+          # the menu entry has to name a view the package actually ships
+          view=$(grep -o '"path": *"[^"]*"' verifyl/apk/usr/share/luci/menu.d/luci-app-ovpn.json | cut -d'"' -f4 | head -1)
+          test -s "verifyl/apk/www/luci-static/resources/view/$view.js"
+          echo "== menu points at $view.js, which is in the package"
+
           # both formats must ship exactly the same tree
           ( cd verify/apk && find . -type f | grep -v '^./lib/apk' | sort ) > apk.list
           ( cd verify/ipk/data && find . -type f | sort ) > ipk.list
