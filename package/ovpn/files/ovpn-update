@@ -73,6 +73,7 @@ cmd_parse() {
 	fi
 	mv -f "$CAND.new" "$CAND"
 	log "$(wc -l < "$CAND") servers to test"
+	echo "selecting" > "$STATE_DIR/status" 2>/dev/null || true
 }
 
 # Build one xray instance holding every candidate at once, each behind its own

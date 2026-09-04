@@ -15,9 +15,14 @@ var callAction = rpc.declare({ object: 'luci.ovpn', method: 'action', params: [ 
 
 function badge(st) {
 	var text, colour;
-	if (!st.running)        { text = _('Disconnected'); colour = '#94a3b8'; }
-	else if (st.connected)  { text = _('Connected');    colour = '#10b981'; }
-	else                    { text = _('Connecting…');  colour = '#f59e0b'; }
+	/* Choosing a server is a minute of timed requests. Without saying so, the
+	   whole wait looks exactly like a button that did nothing. */
+	if (st.connected)                    { text = _('Connected');   colour = '#10b981'; }
+	else if (st.status == 'selecting')   { text = _('Finding the fastest server…'); colour = '#f59e0b'; }
+	else if (st.status == 'starting')    { text = _('Starting…'); colour = '#f59e0b'; }
+	else if (st.status == 'failed')      { text = _('No server could be reached'); colour = '#ef4444'; }
+	else if (st.running)                 { text = _('Connecting…'); colour = '#f59e0b'; }
+	else                                 { text = _('Disconnected'); colour = '#94a3b8'; }
 
 	return E('span', {
 		'style': 'background:' + colour + ';color:#fff;padding:4px 14px;border-radius:12px;' +
@@ -46,10 +51,11 @@ function render(st) {
 	setNode('ovpn-server', st.connected ? (st.server || '-') : '-');
 	setNode('ovpn-latency', st.connected && st.latency_ms > 0 ? st.latency_ms + ' ms' : '-');
 
+	var busy = (st.status == 'selecting' || st.status == 'starting');
 	var connect = document.getElementById('ovpn-connect');
 	var disconnect = document.getElementById('ovpn-disconnect');
-	if (connect)    connect.disabled = !!st.enabled;
-	if (disconnect) disconnect.disabled = !st.enabled;
+	if (connect)    connect.disabled = !!st.enabled || busy;
+	if (disconnect) disconnect.disabled = !st.enabled && !busy;
 }
 
 function act(name) {

@@ -27,15 +27,14 @@ start_service() {
 
 	mkdir -p "$STATE_DIR" /var/etc /etc/ovpn
 
-	# No server picked yet, or the pick is from a previous boot: choose one
-	# before starting. Detached, because this takes as long as a hundred
-	# timed requests and a service start must not block on the network.
+	# Selecting a server is a minute of timed requests and must not happen
+	# here: procd would be held for the whole measurement, and the service
+	# would be neither started nor failed while it waited. ovpn-connect does
+	# the measuring and then calls us. At boot there is a selection from last
+	# time, which is why the list is kept in /etc.
 	if [ ! -s "$STATE_DIR/best.json" ]; then
-		logger -t ovpn "no server selected yet - selecting"
-		"$UPDATE" update >/dev/null 2>&1 || {
-			logger -t ovpn "could not select a server"
-			return 1
-		}
+		logger -t ovpn "no server selected - run ovpn-connect, or press Connect"
+		return 1
 	fi
 
 	if ! "$MKCONFIG" > "$CONFIG_JSON"; then

@@ -1,0 +1,39 @@
+#!/bin/sh
+#
+# SPDX-License-Identifier: GPL-3.0-only
+# Copyright (C) 2026 dreamboxone <https://t.me/routekernel1>
+# Part of ovpn - https://github.com/dreamboxone/ovpn
+#
+# ovpn-connect - what the Connect button actually does.
+#
+# Choosing a server means a timed request through each of a hundred of them,
+# which takes a minute or two. That cannot happen inside start_service: procd
+# would be held for the whole measurement, and the service it is starting
+# would be neither started nor failed while it waited. So the measuring
+# happens here, and the service start is the quick step at the end.
+
+set -e
+
+STATE_DIR=/var/run/ovpn
+STATUS="$STATE_DIR/status"
+UPDATE=/usr/libexec/ovpn-update
+
+mkdir -p "$STATE_DIR"
+
+# The interface reads this. Without it the whole selection looks to a user
+# exactly like a button that did nothing.
+say() { echo "$1" > "$STATUS"; }
+
+trap 'say failed' INT TERM
+
+say selecting
+if "$UPDATE" update >/dev/null 2>&1; then
+	say starting
+	if /etc/init.d/ovpn restart >/dev/null 2>&1; then
+		say ready
+	else
+		say failed
+	fi
+else
+	say failed
+fi
