@@ -1,0 +1,188 @@
+# SPDX-License-Identifier: GPL-3.0-only
+# Copyright (C) 2026 dreamboxone <https://t.me/routekernel1>
+# Part of ovpn - https://github.com/dreamboxone/ovpn
+#
+# Build installable OpenWrt packages in both formats and publish them.
+#
+# Triggered by pushing a version tag:
+#
+#     git tag v1.0.0 && git push origin v1.0.0
+
+name: Build and release packages
+
+on:
+  push:
+    tags: [ 'v*' ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  OPENWRT_RELEASE: '25.12.5'
+  SDK_TARGET: 'ipq40xx/generic'      # only the host apk tool is taken from it
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: armv7      # ipq40xx, mvebu, most ARM routers
+            openwrt_arch: arm_cortex-a7_neon-vfpv4
+          - name: aarch64    # filogic, rockchip, newer ARM64 routers
+            openwrt_arch: aarch64_cortex-a53
+          - name: mipsel     # ramips / mt7621
+            openwrt_arch: mipsel_24kc
+          - name: x86_64     # x86 builds and VMs
+            openwrt_arch: x86_64
+
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v7
+
+      - name: Fetch the Xray core for ${{ matrix.name }}
+        run: |
+          set -euo pipefail
+          sh ./build/build-core.sh ${{ matrix.name }}
+          ls -l prebuilt/${{ matrix.openwrt_arch }}/xray
+          file prebuilt/${{ matrix.openwrt_arch }}/xray
+
+      - name: Smoke test the core
+        if: matrix.name == 'x86_64'
+        run: |
+          set -euo pipefail
+          # The runner can execute the x86_64 build, so actually start it. The
+          # cross builds are not runnable here, so without this nothing in the
+          # pipeline would notice a core that cannot run at all.
+          ./prebuilt/x86_64/xray version
+
+      - name: Fetch the apk tool from an OpenWrt SDK
+        run: |
+          set -euo pipefail
+          base="https://downloads.openwrt.org/releases/${OPENWRT_RELEASE}/targets/${SDK_TARGET}"
+          name=$(curl -fsSL "$base/" \
+                 | grep -o 'openwrt-sdk-[^"]*\.Linux-x86_64\.tar\.\(xz\|zst\)' \
+                 | head -1)
+          [ -n "$name" ] || { echo "::error::no SDK found under $base"; exit 1; }
+          echo "SDK: $name"
+
+          curl -fsSL --retry 3 -o sdk.tar "$base/$name"
+          mkdir -p sdk
+          case "$name" in
+            *.zst) sudo apt-get update -qq && sudo apt-get install -y zstd
+                   tar --use-compress-program=unzstd -xf sdk.tar -C sdk --strip-components=1 ;;
+            *.xz)  tar -xJf sdk.tar -C sdk --strip-components=1 ;;
+          esac
+
+          echo "APK_BIN=$PWD/sdk/staging_dir/host/bin/apk" >> "$GITHUB_ENV"
+          "$PWD/sdk/staging_dir/host/bin/apk" --version
+
+      - name: Package for ${{ matrix.openwrt_arch }}
+        run: |
+          set -euo pipefail
+          # as root so packaged files are owned by root:root
+          sudo -E sh ./build/build-apk.sh "${{ matrix.openwrt_arch }}" "$APK_BIN"
+          sudo -E sh ./build/build-ipk.sh "${{ matrix.openwrt_arch }}"
+          ls -l dist/
+
+      - name: Verify the packages
+        run: |
+          set -euo pipefail
+          for f in dist/*.apk; do
+            echo "== $f"
+            "$APK_BIN" adbdump "$f" | grep -E '^[[:space:]]*(name|version|arch):' || true
+          done
+
+          rm -rf verify && mkdir -p verify/apk verify/ipk
+          "$APK_BIN" extract --destination verify/apk --allow-untrusted --no-chown dist/ovpn-*.apk
+          test -x verify/apk/usr/bin/xray
+          file verify/apk/usr/bin/xray
+
+          tar -xzf dist/ovpn_*_${{ matrix.openwrt_arch }}.ipk -C verify/ipk
+          mkdir -p verify/ipk/data verify/ipk/control
+          tar -xzf verify/ipk/data.tar.gz -C verify/ipk/data
+          tar -xzf verify/ipk/control.tar.gz -C verify/ipk/control
+          test -x verify/ipk/data/usr/bin/xray
+          file verify/ipk/data/usr/bin/xray
+          grep -qx "Architecture: ${{ matrix.openwrt_arch }}" verify/ipk/control/control
+
+          # both formats must ship exactly the same tree
+          ( cd verify/apk && find . -type f | grep -v '^./lib/apk' | sort ) > apk.list
+          ( cd verify/ipk/data && find . -type f | sort ) > ipk.list
+          diff apk.list ipk.list
+          echo "== both formats ship $(wc -l < ipk.list) identical paths"
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: ovpn-${{ matrix.openwrt_arch }}
+          path: |
+            dist/*.apk
+            dist/*.ipk
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v7
+
+      - name: Collect every architecture
+        uses: actions/download-artifact@v8
+        with:
+          path: artifacts
+
+      - name: Lay the files out for the release
+        run: |
+          set -euo pipefail
+          mkdir -p release
+          for dir in artifacts/ovpn-*; do
+            arch="${dir#artifacts/ovpn-}"
+            for f in "$dir"/*.apk; do
+              base=$(basename "$f" .apk)
+              case "$base" in
+                luci-app-*) cp -f "$f" "release/$base.apk" ;;   # noarch, one copy
+                *)          cp -f "$f" "release/$base.$arch.apk" ;;
+              esac
+            done
+            # .ipk filenames already carry the architecture
+            for f in "$dir"/*.ipk; do cp -f "$f" "release/$(basename "$f")"; done
+          done
+          ls -l release/
+          (cd release && sha256sum * > SHA256SUMS)
+
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME}"
+
+          cat > notes.md <<'NOTES'
+          Pick the pair that matches your router. OpenWrt changed package
+          manager in 25.12, so both formats are here.
+
+          | Your OpenWrt | Files |
+          |---|---|
+          | 25.12 and later | `ovpn-<version>.<arch>.apk` and `luci-app-ovpn-<version>.apk` |
+          | 24.10, 23.05 | `ovpn_<version>_<arch>.ipk` and `luci-app-ovpn_<version>_all.ipk` |
+
+          Your architecture is `DISTRIB_ARCH` in `/etc/openwrt_release`.
+
+          Then open LuCI, go to **Services -> ovpn** and press **Connect**.
+
+          Full guide: README.md (English), README.fa.md (فارسی).
+          NOTES
+          sed -i 's/^          //' notes.md
+
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release upload "$tag" release/* --clobber
+            gh release edit   "$tag" --title "ovpn $tag" --notes-file notes.md
+          else
+            gh release create "$tag" release/* \
+              --title "ovpn $tag" \
+              --notes-file notes.md
+          fi

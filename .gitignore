@@ -1,0 +1,4 @@
+dist/
+.build/
+prebuilt/*/xray
+prebuilt/*/xray-version.txt
