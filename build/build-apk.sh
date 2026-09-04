@@ -99,8 +99,6 @@ finalize() {
 		echo ". \${IPKG_INSTROOT}/lib/functions.sh"
 		echo 'export root="${IPKG_INSTROOT}"'
 		echo "export pkgname=\"$name\""
-		echo "add_group_and_user"
-		echo "default_postinst"
 		[ -f "$WORK/$name.postinst" ] && sed '/^[[:space:]]*#!/d' "$WORK/$name.postinst"
 	} > "$adir/post-install"
 
@@ -116,7 +114,6 @@ finalize() {
 		echo ". \${IPKG_INSTROOT}/lib/functions.sh"
 		echo 'export root="${IPKG_INSTROOT}"'
 		echo "export pkgname=\"$name\""
-		echo "default_prerm"
 		[ -f "$WORK/$name.prerm" ] && sed '/^[[:space:]]*#!/d' "$WORK/$name.prerm"
 	} > "$adir/pre-deinstall"
 

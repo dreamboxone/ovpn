@@ -8,7 +8,7 @@
 # builders so the two formats can never drift apart.
 
 VERSION=1.0.0
-RELEASE=5
+RELEASE=6
 PKGVER="$VERSION-r$RELEASE"
 LICENSE="GPL-3.0-only"
 URL="https://github.com/dreamboxone/ovpn"
@@ -57,18 +57,23 @@ mkdir -p /etc/ovpn /var/run/ovpn
 touch /etc/crontabs/root
 sed -i '\|/usr/libexec/ovpn-update|d' /etc/crontabs/root
 echo '$CRON_LINE' >> /etc/crontabs/root
-/etc/init.d/cron reload >/dev/null 2>&1
-/etc/init.d/rpcd reload >/dev/null 2>&1
+# Every one of these takes a procd lock, and a lock held by something that
+# died leaves the call waiting for good - which would strand the install
+# half done and make the package impossible to remove afterwards. Bound
+# them: none of this is worth failing an installation over.
+timeout 15 /etc/init.d/cron reload >/dev/null 2>&1 || true
+timeout 15 /etc/init.d/rpcd reload >/dev/null 2>&1 || true
 exit 0
 EOF
 
 	cat > "$work/ovpn.prerm" <<'EOF'
-/etc/init.d/ovpn stop >/dev/null 2>&1
-/etc/init.d/ovpn disable >/dev/null 2>&1
+timeout 20 /etc/init.d/ovpn stop >/dev/null 2>&1 || true
+timeout 15 /etc/init.d/ovpn disable >/dev/null 2>&1 || true
 sed -i '\|/usr/libexec/ovpn-update|d' /etc/crontabs/root 2>/dev/null
-/etc/init.d/cron reload >/dev/null 2>&1
+timeout 15 /etc/init.d/cron reload >/dev/null 2>&1 || true
 exit 0
 EOF
+
 }
 
 # stage_luci <staging-root> <source-root>
@@ -89,8 +94,8 @@ stage_luci() {
 	cat > "$work/luci-app-ovpn.postinst" <<'EOF'
 rm -f /tmp/luci-indexcache* 2>/dev/null
 rm -rf /tmp/luci-modulecache 2>/dev/null
-/etc/init.d/rpcd reload >/dev/null 2>&1
-/etc/init.d/uhttpd restart >/dev/null 2>&1
+timeout 15 /etc/init.d/rpcd reload >/dev/null 2>&1 || true
+timeout 15 /etc/init.d/uhttpd restart >/dev/null 2>&1 || true
 exit 0
 EOF
 }

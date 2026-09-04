@@ -65,7 +65,7 @@ if [ "$MODE" = "prepare" ]; then
 fi
 
 say starting
-if /etc/init.d/ovpn restart >/dev/null 2>&1; then
+if timeout 40 /etc/init.d/ovpn restart >/dev/null 2>&1; then
 	say ready
 else
 	say failed

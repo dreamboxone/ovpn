@@ -77,7 +77,6 @@ finalize() {
 		echo ". \${IPKG_INSTROOT}/lib/functions.sh"
 		echo 'export root="${IPKG_INSTROOT}"'
 		echo "export pkgname=\"$name\""
-		echo "default_postinst \$0 \$@"
 		[ -f "$WORK/$name.postinst" ] && sed '/^[[:space:]]*#!/d' "$WORK/$name.postinst"
 	} > "$cdir/postinst"
 
@@ -87,7 +86,6 @@ finalize() {
 		echo ". \${IPKG_INSTROOT}/lib/functions.sh"
 		echo 'export root="${IPKG_INSTROOT}"'
 		echo "export pkgname=\"$name\""
-		echo "default_prerm \$0 \$@"
 		[ -f "$WORK/$name.prerm" ] && sed '/^[[:space:]]*#!/d' "$WORK/$name.prerm"
 	} > "$cdir/prerm"
 
