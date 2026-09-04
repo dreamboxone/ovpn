@@ -24,7 +24,7 @@ BEST="$STATE_DIR/best.json"
 BEST_META="$STATE_DIR/best.meta"
 RESULTS="$STATE_DIR/results.tsv"
 STAMP=/etc/ovpn/last-update
-XRAY=/usr/bin/xray
+XRAY=/usr/libexec/ovpn/xray
 PARSE=/usr/libexec/ovpn-parse
 
 # Where the servers come from. Deliberately kept here and nowhere else - not in

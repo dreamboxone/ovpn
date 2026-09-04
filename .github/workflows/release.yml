@@ -97,15 +97,15 @@ jobs:
 
           rm -rf verify && mkdir -p verify/apk verify/ipk
           "$APK_BIN" extract --destination verify/apk --allow-untrusted --no-chown dist/ovpn-*.apk
-          test -x verify/apk/usr/bin/xray
-          file verify/apk/usr/bin/xray
+          test -x verify/apk/usr/libexec/ovpn/xray
+          file verify/apk/usr/libexec/ovpn/xray
 
           tar -xzf dist/ovpn_*_${{ matrix.openwrt_arch }}.ipk -C verify/ipk
           mkdir -p verify/ipk/data verify/ipk/control
           tar -xzf verify/ipk/data.tar.gz -C verify/ipk/data
           tar -xzf verify/ipk/control.tar.gz -C verify/ipk/control
-          test -x verify/ipk/data/usr/bin/xray
-          file verify/ipk/data/usr/bin/xray
+          test -x verify/ipk/data/usr/libexec/ovpn/xray
+          file verify/ipk/data/usr/libexec/ovpn/xray
           grep -qx "Architecture: ${{ matrix.openwrt_arch }}" verify/ipk/control/control
 
           # both formats must ship exactly the same tree

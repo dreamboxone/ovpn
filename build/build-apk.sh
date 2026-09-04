@@ -73,7 +73,7 @@ finalize() {
 	find "$idir" -type f -exec chmod 0644 {} +
 	# derive what must be executable from where it lives, so a helper added
 	# later cannot be shipped non-executable by accident
-	for d in usr/bin usr/sbin etc/init.d usr/libexec usr/libexec/rpcd; do
+	for d in usr/bin usr/sbin etc/init.d usr/libexec usr/libexec/rpcd usr/libexec/ovpn; do
 		[ -d "$idir/$d" ] && find "$idir/$d" -maxdepth 1 -type f -exec chmod 0755 {} +
 	done
 	chown -R 0:0 "$idir"

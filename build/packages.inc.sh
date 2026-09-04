@@ -8,7 +8,7 @@
 # builders so the two formats can never drift apart.
 
 VERSION=1.0.0
-RELEASE=1
+RELEASE=2
 PKGVER="$VERSION-r$RELEASE"
 LICENSE="GPL-3.0-only"
 URL="https://github.com/dreamboxone/ovpn"
@@ -29,9 +29,13 @@ stage_ovpn() {
 	f="$root/package/ovpn/files"
 	i="$work/ovpn"
 
-	install -d "$i/usr/bin" "$i/etc/config" "$i/etc/init.d" \
+	# Our own copy of the core lives under /usr/libexec/ovpn. /usr/bin/xray
+	# belongs to OpenWrt's xray-core package, which PassWall2 and others pull
+	# in, and claiming that path makes this package refuse to install on any
+	# router that already has one.
+	install -d "$i/usr/libexec/ovpn" "$i/etc/config" "$i/etc/init.d" \
 	           "$i/usr/libexec/rpcd" "$i/etc/ovpn"
-	install -m 0755 "$core"              "$i/usr/bin/xray"
+	install -m 0755 "$core"              "$i/usr/libexec/ovpn/xray"
 	install -m 0644 "$f/ovpn.config"     "$i/etc/config/ovpn"
 	install -m 0755 "$f/ovpn.init"       "$i/etc/init.d/ovpn"
 	install -m 0755 "$f/ovpn-update"     "$i/usr/libexec/ovpn-update"
