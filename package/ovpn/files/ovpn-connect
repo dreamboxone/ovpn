@@ -65,8 +65,11 @@ if [ "$MODE" = "prepare" ]; then
 fi
 
 say starting
-if timeout 40 /etc/init.d/ovpn restart >/dev/null 2>&1; then
+if timeout 60 /etc/init.d/ovpn restart >/dev/null 2>&1; then
 	say ready
 else
+	# A failed start must not leave the network pointing at a tunnel that
+	# is not there. Better disconnected than unreachable.
+	/usr/libexec/ovpn-rules down >/dev/null 2>&1 || true
 	say failed
 fi

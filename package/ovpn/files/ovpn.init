@@ -16,10 +16,11 @@ CONFIG_JSON=/var/etc/ovpn.json
 STATE_DIR=/var/run/ovpn
 
 start_service() {
-	local enabled
+	local enabled tproxy_port
 
 	config_load ovpn
 	config_get_bool enabled config enabled 0
+	config_get tproxy_port config tproxy_port 1082
 	if [ "$enabled" != "1" ]; then
 		logger -t ovpn "not starting: press Connect first"
 		return 0
@@ -60,9 +61,29 @@ start_service() {
 	procd_set_param pidfile /var/run/ovpn.pid
 	procd_close_instance
 
-	# rules last: with them up and xray not yet listening, the LAN would have
-	# no way out at all
-	"$RULES" up >/dev/null 2>&1 || logger -t ovpn "could not install the routing rules"
+	# The rules send every LAN packet to a port xray listens on, and name
+	# lookups to another. Install them before xray is actually listening and
+	# the entire network has nowhere to go - no web, no DNS, nothing, and no
+	# obvious reason why. So wait for the socket, and if it never appears,
+	# leave the network alone and say so.
+	n=0
+	while [ $n -lt 20 ]; do
+		netstat -lnt 2>/dev/null | grep -q ":$tproxy_port " && break
+		n=$((n + 1))
+		sleep 1
+	done
+
+	if [ $n -ge 20 ]; then
+		logger -t ovpn "xray never started listening on $tproxy_port - leaving the network untouched"
+		"$RULES" down >/dev/null 2>&1 || true
+		return 1
+	fi
+
+	if ! "$RULES" up >/dev/null 2>&1; then
+		logger -t ovpn "could not install the routing rules - leaving the network untouched"
+		"$RULES" down >/dev/null 2>&1 || true
+		return 1
+	fi
 }
 
 stop_service() {
