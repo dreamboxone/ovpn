@@ -23,6 +23,7 @@ CAND="$STATE_DIR/candidates.tsv"
 BEST="$STATE_DIR/best.json"
 BEST_META="$STATE_DIR/best.meta"
 RESULTS="$STATE_DIR/results.tsv"
+ATTEMPTS="$STATE_DIR/attempts"
 STAMP=/etc/ovpn/last-update
 COMMON=/usr/libexec/ovpn-common.sh
 PARSE=/usr/libexec/ovpn-parse
@@ -132,8 +133,10 @@ cmd_test() {
 	sleep 2
 
 	: > "$RESULTS"
+	: > "$ATTEMPTS"
 	i=0
 	running=0
+	pids=""
 	while IFS="	" read -r tag label json; do
 		[ -n "$tag" ] || continue
 		port=$((BASE_PORT + i))
@@ -151,11 +154,22 @@ cmd_test() {
 					"$(awk -v t="$ms" 'BEGIN{printf "%d", t*1000}')" \
 					"$tag" "$label" >> "$RESULTS"
 			fi
+			# one line per server tried, whatever the outcome: this is what the
+			# progress bar counts
+			echo x >> "$ATTEMPTS"
 		) &
+		pids="$pids $!"
 		running=$((running + 1))
-		if [ "$running" -ge "$TEST_PARALLEL" ]; then wait; running=0; fi
+		# Wait for these children by name, never a bare `wait`: xray is a
+		# background job of this same shell, so a bare wait sits on it until it
+		# exits - which it never does. That stopped the whole selection dead at
+		# the first batch boundary, and looked exactly like finding nothing.
+		if [ "$running" -ge "$TEST_PARALLEL" ]; then
+			for _p in $pids; do wait "$_p" 2>/dev/null || true; done
+			pids=""; running=0
+		fi
 	done < "$CAND"
-	wait
+	for _p in $pids; do wait "$_p" 2>/dev/null || true; done
 
 	kill "$xpid" 2>/dev/null || true
 	wait "$xpid" 2>/dev/null || true

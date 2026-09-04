@@ -60,9 +60,23 @@ function render(st) {
 	if (connect)    connect.disabled = busy || !!st.enabled;
 	if (disconnect) disconnect.disabled = busy || !st.enabled;
 
-	setNode('ovpn-why', busy
-		? _('Every server is being tried with a real request, and the fastest one wins. This takes about half a minute.')
-		: '');
+	/* Real progress, not a timer: the backend counts servers answered for.
+	   It fills to the end and stops there, which is the moment Connect
+	   becomes worth pressing. */
+	var bar = document.getElementById('ovpn-bar');
+	var fill = document.getElementById('ovpn-fill');
+	var pct = 0;
+	if (st.total > 0) pct = Math.min(100, Math.round((st.tried || 0) * 100 / st.total));
+	if (st.connected || st.status == 'idle' || st.status == 'ready') pct = 100;
+
+	if (bar) bar.style.display = (busy || pct == 100) ? 'block' : 'none';
+	if (fill) {
+		fill.style.width = pct + '%';
+		fill.style.background = pct == 100 ? '#10b981' : '#3b82f6';
+	}
+	setNode('ovpn-pct', busy && st.total > 0
+		? '%d%% · %d / %d'.format(pct, st.tried || 0, st.total)
+		: (pct == 100 ? _('Ready') : ''));
 }
 
 function act(name) {
@@ -92,9 +106,24 @@ return view.extend({
 				E('span', { 'id': 'ovpn-state' }, '-')
 			]),
 			E('div', {
-				'id': 'ovpn-why',
-				'style': 'margin:-6px 0 12px 0;opacity:.7;font-size:13px'
-			}, ''),
+				'id': 'ovpn-bar',
+				'style': 'display:none;margin:-2px 0 14px 0'
+			}, [
+				E('div', {
+					'style': 'height:8px;border-radius:6px;overflow:hidden;' +
+					         'background:rgba(127,127,127,.18)'
+				}, [
+					E('div', {
+						'id': 'ovpn-fill',
+						'style': 'height:100%;width:0%;background:#3b82f6;' +
+						         'border-radius:6px;transition:width .45s ease,background .45s ease'
+					}, '')
+				]),
+				E('div', {
+					'id': 'ovpn-pct',
+					'style': 'margin-top:5px;font-size:12px;opacity:.7'
+				}, '')
+			]),
 			line(_('Server'), 'ovpn-server'),
 			line(_('Latency'), 'ovpn-latency'),
 			E('div', { 'style': 'margin-top:16px;display:flex;gap:10px' }, [
