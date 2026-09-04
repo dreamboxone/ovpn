@@ -1,0 +1,101 @@
+#!/bin/sh
+#
+# SPDX-License-Identifier: GPL-3.0-only
+# Copyright (C) 2026 dreamboxone <https://t.me/routekernel1>
+# Part of ovpn - https://github.com/dreamboxone/ovpn
+#
+# ovpn-rules - send LAN traffic into the tunnel, and only LAN traffic.
+#
+#   ovpn-rules up     install the rules
+#   ovpn-rules down   remove them
+#
+# Deliberately hooks prerouting only. Nothing here touches the output hook, so
+# traffic the router itself creates - xray reaching its server, the daily list
+# refresh, the latency tests - always goes out directly. A tunnel whose own
+# packets are routed back into itself never connects, and that failure is
+# invisible: everything looks configured, nothing works.
+
+set -e
+
+TABLE=ovpn
+MARK=0x162
+
+. /lib/functions.sh
+config_load ovpn 2>/dev/null || true
+config_get tproxy_port config tproxy_port 1082
+config_get lan_zone    config lan_zone    ''
+
+lan_devices() {
+	if [ -n "$lan_zone" ]; then
+		echo "$lan_zone"
+		return
+	fi
+	# every bridge/interface that carries a LAN, as the router itself sees it
+	. /lib/functions/network.sh
+	local dev devs=""
+	for iface in $(ubus list network.interface.* 2>/dev/null | sed 's/network\.interface\.//'); do
+		case "$iface" in
+			wan|wan6|wwan|loopback) continue ;;
+		esac
+		network_get_device dev "$iface" 2>/dev/null || dev=""
+		[ -n "$dev" ] && devs="$devs $dev"
+	done
+	[ -n "$devs" ] || devs="br-lan"
+	echo "$devs"
+}
+
+cmd_up() {
+	cmd_down
+
+	devs="$(lan_devices)"
+	set -- $devs
+	[ "$#" -gt 0 ] || { echo "no LAN device found" >&2; exit 1; }
+
+	# policy routing: anything we mark is handed to the local tproxy socket
+	ip rule add fwmark "$MARK" lookup 100 2>/dev/null || true
+	ip route add local 0.0.0.0/0 dev lo table 100 2>/dev/null || true
+
+	iflist=""
+	for d in $devs; do
+		[ -n "$iflist" ] && iflist="$iflist, "
+		iflist="$iflist\"$d\""
+	done
+
+	nft -f - <<NFT
+table inet $TABLE {
+	set reserved {
+		type ipv4_addr
+		flags interval
+		elements = {
+			0.0.0.0/8, 10.0.0.0/8, 100.64.0.0/10, 127.0.0.0/8,
+			169.254.0.0/16, 172.16.0.0/12, 192.168.0.0/16,
+			224.0.0.0/4, 240.0.0.0/4
+		}
+	}
+
+	chain prerouting {
+		type filter hook prerouting priority mangle; policy accept;
+
+		iifname != { $iflist } return
+		ip daddr @reserved return
+		meta l4proto { tcp, udp } th dport 53 return
+
+		meta l4proto tcp tproxy ip to 127.0.0.1:$tproxy_port meta mark set $MARK accept
+		meta l4proto udp tproxy ip to 127.0.0.1:$tproxy_port meta mark set $MARK accept
+	}
+}
+NFT
+	echo "tunnelling $devs"
+}
+
+cmd_down() {
+	nft delete table inet $TABLE 2>/dev/null || true
+	ip rule del fwmark "$MARK" lookup 100 2>/dev/null || true
+	ip route del local 0.0.0.0/0 dev lo table 100 2>/dev/null || true
+}
+
+case "${1:-}" in
+	up)   cmd_up ;;
+	down) cmd_down ;;
+	*) echo "usage: $0 up|down" >&2; exit 1 ;;
+esac

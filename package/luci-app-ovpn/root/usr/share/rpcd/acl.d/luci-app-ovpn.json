@@ -1,0 +1,17 @@
+{
+	"luci-app-ovpn": {
+		"description": "Grant access to ovpn",
+		"read": {
+			"ubus": {
+				"luci.ovpn": [ "state" ]
+			},
+			"uci": [ "ovpn" ]
+		},
+		"write": {
+			"ubus": {
+				"luci.ovpn": [ "action" ]
+			},
+			"uci": [ "ovpn" ]
+		}
+	}
+}

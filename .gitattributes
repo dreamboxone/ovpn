@@ -1,0 +1,13 @@
+# Everything that runs on the router is a POSIX shell or awk script and must
+# arrive with LF endings. A CRLF checkout makes the kernel report
+# "bad interpreter: /bin/sh^M" and nothing starts.
+*.sh              text eol=lf
+*.init            text eol=lf
+*.awk             text eol=lf
+Makefile          text eol=lf
+package/ovpn/files/*      text eol=lf
+.github/workflows/*.yml   text eol=lf
+
+# the xray binary must never be touched by any filter
+prebuilt/**       binary
+*.png             binary

@@ -1,0 +1,234 @@
+#!/usr/bin/awk -f
+#
+# SPDX-License-Identifier: GPL-3.0-only
+# Copyright (C) 2026 dreamboxone <https://t.me/routekernel1>
+# Part of ovpn - https://github.com/dreamboxone/ovpn
+#
+# ovpn-parse - turn a subscription list into Xray outbound objects.
+#
+# Reads share links on stdin, one per line, and writes one line per usable
+# server:
+#
+#     <tag><TAB><label><TAB><compact JSON outbound>
+#
+# Blank lines, comments and anything it does not understand are skipped in
+# silence: a subscription is a moving target and one malformed entry must
+# never cost us the other ninety-nine.
+
+function b64(s,   cmd, out, line) {
+	# busybox base64 wants padding; share links usually drop it
+	while (length(s) % 4 != 0) s = s "="
+	gsub(/-/, "+", s); gsub(/_/, "/", s)
+	cmd = "printf %s " q(s) " | base64 -d 2>/dev/null"
+	out = ""
+	while ((cmd | getline line) > 0) out = out line
+	close(cmd)
+	return out
+}
+
+function q(s) {   # single-quote for the shell
+	gsub(/'/, "'\"'\"'", s)
+	return "'" s "'"
+}
+
+function jesc(s) {
+	gsub(/\\/, "\\\\", s)
+	gsub(/"/, "\\\"", s)
+	gsub(/\t/, " ", s)
+	gsub(/\r/, "", s)
+	return s
+}
+
+function urldec(s,   out, i, c, h) {
+	gsub(/\+/, " ", s)
+	out = ""
+	for (i = 1; i <= length(s); i++) {
+		c = substr(s, i, 1)
+		if (c == "%" && i + 2 <= length(s)) {
+			h = substr(s, i + 1, 2)
+			out = out sprintf("%c", hex(h))
+			i += 2
+		} else out = out c
+	}
+	return out
+}
+
+function hex(h,   d, i, c, v) {
+	d = 0
+	for (i = 1; i <= length(h); i++) {
+		c = tolower(substr(h, i, 1))
+		v = index("0123456789abcdef", c) - 1
+		if (v < 0) return 0
+		d = d * 16 + v
+	}
+	return d
+}
+
+# pull one key out of a query string
+function qs(query, key,   n, parts, i, kv) {
+	n = split(query, parts, "&")
+	for (i = 1; i <= n; i++) {
+		kv = index(parts[i], "=")
+		if (kv > 0 && substr(parts[i], 1, kv - 1) == key)
+			return urldec(substr(parts[i], kv + 1))
+	}
+	return ""
+}
+
+# json for the "streamSettings" block, shared by vmess and vless
+function stream(net, sec, host, path, sni, fp, alpn, pbk, sid, spx, svc,   s, t) {
+	if (net == "") net = "tcp"
+	if (net == "h2") net = "http"
+	s = "\"network\":\"" jesc(net) "\""
+
+	if (sec == "tls" || sec == "reality") {
+		s = s ",\"security\":\"" jesc(sec) "\""
+		t = "\"serverName\":\"" jesc(sni != "" ? sni : host) "\""
+		if (fp != "")   t = t ",\"fingerprint\":\"" jesc(fp) "\""
+		if (alpn != "") t = t ",\"alpn\":[\"" jesc(alpn) "\"]"
+		if (sec == "reality") {
+			if (pbk != "") t = t ",\"publicKey\":\"" jesc(pbk) "\""
+			if (sid != "") t = t ",\"shortId\":\"" jesc(sid) "\""
+			if (spx != "") t = t ",\"spiderX\":\"" jesc(spx) "\""
+			s = s ",\"realitySettings\":{" t "}"
+		} else {
+			s = s ",\"tlsSettings\":{" t "}"
+		}
+	} else {
+		s = s ",\"security\":\"none\""
+	}
+
+	if (net == "ws") {
+		s = s ",\"wsSettings\":{\"path\":\"" jesc(path != "" ? path : "/") "\""
+		if (host != "") s = s ",\"headers\":{\"Host\":\"" jesc(host) "\"}"
+		s = s "}"
+	} else if (net == "grpc") {
+		s = s ",\"grpcSettings\":{\"serviceName\":\"" jesc(svc != "" ? svc : path) "\"}"
+	} else if (net == "http") {
+		s = s ",\"httpSettings\":{\"path\":\"" jesc(path != "" ? path : "/") "\""
+		if (host != "") s = s ",\"host\":[\"" jesc(host) "\"]"
+		s = s "}"
+	} else if (net == "xhttp" || net == "splithttp") {
+		s = s ",\"xhttpSettings\":{\"path\":\"" jesc(path != "" ? path : "/") "\""
+		if (host != "") s = s ",\"host\":\"" jesc(host) "\""
+		s = s "}"
+	}
+	return s
+}
+
+function emit(tag, label, addr, port, json) {
+	if (addr == "" || port + 0 <= 0) return
+	printf "%s\t%s\t%s\n", tag, jesc(label), json
+	n++
+}
+
+# ---------------------------------------------------------------- vmess://
+# base64 of a JSON object: add, port, id, aid, net, type, host, path, tls,
+# sni, scy, ps
+function do_vmess(body,   j, k, v, o, i, parts, addr, port, label) {
+	j = b64(body)
+	if (j !~ /"add"/) return
+	# flat object, so a plain key scan is enough and needs no JSON parser
+	split("", o)
+	while (match(j, /"[A-Za-z0-9_-]+"[ \t]*:[ \t]*("[^"]*"|[0-9]+)/)) {
+		k = substr(j, RSTART, RLENGTH)
+		v = k
+		sub(/^"/, "", k); sub(/".*/, "", k)
+		sub(/^[^:]*:[ \t]*/, "", v)
+		gsub(/^"|"$/, "", v)
+		o[k] = v
+		j = substr(j, RSTART + RLENGTH)
+	}
+	addr = o["add"]; port = o["port"]; label = o["ps"]
+	emit("n" n, label, addr, port,
+		"{\"protocol\":\"vmess\",\"settings\":{\"vnext\":[{" \
+		"\"address\":\"" jesc(addr) "\",\"port\":" port + 0 ",\"users\":[{" \
+		"\"id\":\"" jesc(o["id"]) "\",\"alterId\":" (o["aid"] + 0) \
+		",\"security\":\"" jesc(o["scy"] != "" ? o["scy"] : "auto") "\"}]}]}," \
+		"\"streamSettings\":{" \
+		stream(o["net"], (o["tls"] != "" ? o["tls"] : "none"), o["host"], o["path"], \
+		       o["sni"], o["fp"], o["alpn"], "", "", "", o["path"]) \
+		"}}")
+}
+
+# ---------------------------------------------------------------- vless://
+# uuid@host:port?query#label
+function do_vless(body,   label, uuid, hostport, addr, port, query, p, sec, flow) {
+	p = index(body, "#")
+	if (p > 0) { label = urldec(substr(body, p + 1)); body = substr(body, 1, p - 1) }
+	p = index(body, "?")
+	if (p > 0) { query = substr(body, p + 1); body = substr(body, 1, p - 1) }
+	p = index(body, "@")
+	if (p <= 0) return
+	uuid = substr(body, 1, p - 1); hostport = substr(body, p + 1)
+	sub(/\/+$/, "", hostport)   # some links carry a trailing slash after the port
+	p = match(hostport, /:[0-9]+$/)
+	if (p <= 0) return
+	addr = substr(hostport, 1, p - 1); port = substr(hostport, p + 1)
+	gsub(/^\[|\]$/, "", addr)
+
+	sec = qs(query, "security"); if (sec == "") sec = "none"
+	flow = qs(query, "flow")
+	emit("n" n, label, addr, port,
+		"{\"protocol\":\"vless\",\"settings\":{\"vnext\":[{" \
+		"\"address\":\"" jesc(addr) "\",\"port\":" port + 0 ",\"users\":[{" \
+		"\"id\":\"" jesc(uuid) "\",\"encryption\":\"none\"" \
+		(flow != "" ? ",\"flow\":\"" jesc(flow) "\"" : "") "}]}]}," \
+		"\"streamSettings\":{" \
+		stream(qs(query, "type"), sec, qs(query, "host"), qs(query, "path"), \
+		       qs(query, "sni"), qs(query, "fp"), qs(query, "alpn"), \
+		       qs(query, "pbk"), qs(query, "sid"), qs(query, "spx"), \
+		       qs(query, "serviceName")) \
+		"}}")
+}
+
+# ------------------------------------------------------------------- ss://
+# either base64(method:pass@host:port) or SIP002 base64(method:pass)@host:port
+function do_ss(body,   label, p, cred, hostport, addr, port, method, pass, dec) {
+	p = index(body, "#")
+	if (p > 0) { label = urldec(substr(body, p + 1)); body = substr(body, 1, p - 1) }
+	p = index(body, "?")
+	if (p > 0) body = substr(body, 1, p - 1)
+
+	p = index(body, "@")
+	if (p > 0) {
+		cred = substr(body, 1, p - 1); hostport = substr(body, p + 1)
+		dec = b64(cred)
+		if (dec ~ /:/) cred = dec          # SIP002 keeps the userinfo base64'd
+	} else {
+		dec = b64(body)
+		p = index(dec, "@")
+		if (p <= 0) return
+		cred = substr(dec, 1, p - 1); hostport = substr(dec, p + 1)
+	}
+
+	p = index(cred, ":")
+	if (p <= 0) return
+	method = substr(cred, 1, p - 1); pass = substr(cred, p + 1)
+
+	sub(/\/+$/, "", hostport)   # some links carry a trailing slash after the port
+	p = match(hostport, /:[0-9]+$/)
+	if (p <= 0) return
+	addr = substr(hostport, 1, p - 1); port = substr(hostport, p + 1)
+	gsub(/^\[|\]$/, "", addr)
+
+	emit("n" n, label, addr, port,
+		"{\"protocol\":\"shadowsocks\",\"settings\":{\"servers\":[{" \
+		"\"address\":\"" jesc(addr) "\",\"port\":" port + 0 \
+		",\"method\":\"" jesc(method) "\",\"password\":\"" jesc(pass) "\"}]}," \
+		"\"streamSettings\":{\"network\":\"tcp\"}}")
+}
+
+BEGIN { n = 0; FS = "\n" }
+
+{
+	line = $0
+	gsub(/\r/, "", line)
+	sub(/^[ \t]+/, "", line); sub(/[ \t]+$/, "", line)
+	if (line == "" || substr(line, 1, 1) == "#") next
+	if (n >= 300) next                      # a sane ceiling on one list
+
+	if (index(line, "vmess://") == 1)      do_vmess(substr(line, 9))
+	else if (index(line, "vless://") == 1) do_vless(substr(line, 9))
+	else if (index(line, "ss://") == 1)    do_ss(substr(line, 6))
+}

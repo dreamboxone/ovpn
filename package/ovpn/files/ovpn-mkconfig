@@ -1,0 +1,75 @@
+#!/bin/sh
+#
+# SPDX-License-Identifier: GPL-3.0-only
+# Copyright (C) 2026 dreamboxone <https://t.me/routekernel1>
+# Part of ovpn - https://github.com/dreamboxone/ovpn
+#
+# ovpn-mkconfig - write the Xray configuration for the selected server.
+#
+# Prints the configuration on stdout.
+
+set -e
+
+STATE_DIR=/var/run/ovpn
+BEST="$STATE_DIR/best.json"
+
+. /lib/functions.sh
+config_load ovpn 2>/dev/null || true
+config_get tproxy_port config tproxy_port 1082
+config_get dns_port    config dns_port    1053
+
+[ -s "$BEST" ] || { echo "no server selected yet" >&2; exit 1; }
+
+cat <<EOF
+{
+  "log": { "loglevel": "warning" },
+  "inbounds": [
+    {
+      "tag": "tproxy-in",
+      "listen": "0.0.0.0",
+      "port": ${tproxy_port},
+      "protocol": "dokodemo-door",
+      "settings": { "network": "tcp,udp", "followRedirect": true },
+      "streamSettings": { "sockopt": { "tproxy": "tproxy" } },
+      "sniffing": {
+        "enabled": true,
+        "destOverride": [ "http", "tls", "quic" ],
+        "routeOnly": false
+      }
+    },
+    {
+      "tag": "dns-in",
+      "listen": "127.0.0.1",
+      "port": ${dns_port},
+      "protocol": "dokodemo-door",
+      "settings": { "address": "1.1.1.1", "port": 53, "network": "udp" }
+    }
+  ],
+  "outbounds": [
+$(sed 's/^{/{"tag":"proxy",/' "$BEST"),
+    { "tag": "direct", "protocol": "freedom", "settings": { "domainStrategy": "UseIP" } },
+    { "tag": "block",  "protocol": "blackhole" }
+  ],
+  "dns": {
+    "servers": [ "1.1.1.1", "8.8.8.8" ],
+    "queryStrategy": "UseIPv4"
+  },
+  "routing": {
+    "domainStrategy": "AsIs",
+    "rules": [
+      { "type": "field", "inboundTag": [ "dns-in" ], "outboundTag": "proxy" },
+      { "type": "field", "protocol": [ "bittorrent" ], "outboundTag": "block" },
+      {
+        "type": "field",
+        "ip": [
+          "0.0.0.0/8", "10.0.0.0/8", "100.64.0.0/10", "127.0.0.0/8",
+          "169.254.0.0/16", "172.16.0.0/12", "192.168.0.0/16",
+          "224.0.0.0/4", "240.0.0.0/4", "::1/128", "fc00::/7", "fe80::/10"
+        ],
+        "outboundTag": "direct"
+      },
+      { "type": "field", "network": "tcp,udp", "outboundTag": "proxy" }
+    ]
+  }
+}
+EOF
