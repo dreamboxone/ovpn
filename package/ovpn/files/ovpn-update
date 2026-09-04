@@ -24,8 +24,10 @@ BEST="$STATE_DIR/best.json"
 BEST_META="$STATE_DIR/best.meta"
 RESULTS="$STATE_DIR/results.tsv"
 STAMP=/etc/ovpn/last-update
-XRAY=/usr/libexec/ovpn/xray
+COMMON=/usr/libexec/ovpn-common.sh
 PARSE=/usr/libexec/ovpn-parse
+
+. "$COMMON"
 
 # Where the servers come from. Deliberately kept here and nowhere else - not in
 # UCI, not in the web interface, not in the documentation.
@@ -111,13 +113,12 @@ build_test_config() {
 
 cmd_test() {
 	[ -s "$CAND" ] || cmd_parse || return 1
-	[ -x "$XRAY" ] || { log "xray binary is missing"; return 1; }
 
 	cfg="$(build_test_config)"
-	if ! "$XRAY" run -test -config "$cfg" >/dev/null 2>&1; then
-		log "generated test configuration was rejected by xray"
+	XRAY="$(find_xray "$cfg")" || {
+		log "no xray on this router can run the generated configuration"
 		return 1
-	fi
+	}
 
 	"$XRAY" run -config "$cfg" >/dev/null 2>&1 &
 	xpid=$!

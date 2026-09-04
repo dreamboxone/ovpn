@@ -8,7 +8,7 @@ START=95
 STOP=10
 USE_PROCD=1
 
-PROG=/usr/libexec/ovpn/xray
+COMMON=/usr/libexec/ovpn-common.sh
 UPDATE=/usr/libexec/ovpn-update
 MKCONFIG=/usr/libexec/ovpn-mkconfig
 RULES=/usr/libexec/ovpn-rules
@@ -24,8 +24,6 @@ start_service() {
 		logger -t ovpn "not starting: press Connect first"
 		return 0
 	fi
-
-	[ -x "$PROG" ] || { logger -t ovpn "xray is missing"; return 1; }
 
 	mkdir -p "$STATE_DIR" /var/etc /etc/ovpn
 
@@ -46,10 +44,14 @@ start_service() {
 	fi
 	chmod 600 "$CONFIG_JSON"
 
-	if ! "$PROG" run -test -config "$CONFIG_JSON" >/dev/null 2>&1; then
-		logger -t ovpn "xray rejected the generated configuration"
+	# Prefer a core the router already has; fall back to our own copy. The
+	# candidate has to accept this exact configuration to be chosen.
+	. "$COMMON"
+	PROG="$(find_xray "$CONFIG_JSON")" || {
+		logger -t ovpn "no xray on this router can run the generated configuration"
 		return 1
-	fi
+	}
+	logger -t ovpn "using $PROG"
 
 	procd_open_instance ovpn
 	procd_set_param command "$PROG" run -config "$CONFIG_JSON"

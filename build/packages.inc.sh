@@ -8,7 +8,7 @@
 # builders so the two formats can never drift apart.
 
 VERSION=1.0.0
-RELEASE=2
+RELEASE=3
 PKGVER="$VERSION-r$RELEASE"
 LICENSE="GPL-3.0-only"
 URL="https://github.com/dreamboxone/ovpn"
@@ -40,6 +40,7 @@ stage_ovpn() {
 	install -m 0755 "$f/ovpn.init"       "$i/etc/init.d/ovpn"
 	install -m 0755 "$f/ovpn-update"     "$i/usr/libexec/ovpn-update"
 	install -m 0755 "$f/ovpn-parse"      "$i/usr/libexec/ovpn-parse"
+	install -m 0644 "$f/ovpn-common.sh"   "$i/usr/libexec/ovpn-common.sh"
 	install -m 0755 "$f/ovpn-mkconfig"   "$i/usr/libexec/ovpn-mkconfig"
 	install -m 0755 "$f/ovpn-rules"      "$i/usr/libexec/ovpn-rules"
 	install -m 0755 "$f/luci.ovpn"       "$i/usr/libexec/rpcd/luci.ovpn"

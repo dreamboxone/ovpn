@@ -6,7 +6,7 @@ include $(TOPDIR)/rules.mk
 
 PKG_NAME:=ovpn
 PKG_VERSION:=1.0.0
-PKG_RELEASE:=2
+PKG_RELEASE:=3
 
 PKG_MAINTAINER:=routekernel <https://t.me/routekernel1>
 PKG_LICENSE:=GPL-3.0-only
@@ -48,6 +48,7 @@ define Package/ovpn/install
 	$(INSTALL_DIR) $(1)/usr/libexec
 	$(INSTALL_BIN) ./files/ovpn-update   $(1)/usr/libexec/ovpn-update
 	$(INSTALL_BIN) ./files/ovpn-parse    $(1)/usr/libexec/ovpn-parse
+	$(INSTALL_DATA) ./files/ovpn-common.sh $(1)/usr/libexec/ovpn-common.sh
 	$(INSTALL_BIN) ./files/ovpn-mkconfig $(1)/usr/libexec/ovpn-mkconfig
 	$(INSTALL_BIN) ./files/ovpn-rules    $(1)/usr/libexec/ovpn-rules
 
