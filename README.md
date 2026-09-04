@@ -89,6 +89,23 @@ to be installed on them.
 The router's own traffic is deliberately left alone. That is what keeps the
 tunnel able to reach its own servers.
 
+### Settings
+
+The page has no settings on it: there is nothing to choose that the router
+cannot work out for itself. Two things can be changed over SSH if a
+particular connection needs it, in `/etc/config/ovpn`:
+
+| Option | Default | What it does |
+|---|---|---|
+| `ipv6` | `block` | Refuses IPv6 while the tunnel is up. Almost no server on a free list carries IPv6, and a client that prefers it would go out around the tunnel and look perfectly normal doing so. Blocking makes it fall back to IPv4, which is tunnelled. Set to `off` only on a connection that is IPv6 only. |
+| `block_quic` | `0` | Refuses QUIC (UDP 443) so browsers fall back to TCP. Worth turning on if the chosen server carries UDP badly. |
+
+```sh
+uci set ovpn.config.block_quic=1
+uci commit ovpn
+/etc/init.d/ovpn restart
+```
+
 ---
 
 ## 3. Uninstall

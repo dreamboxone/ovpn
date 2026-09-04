@@ -39,10 +39,13 @@ cat <<EOF
     },
     {
       "tag": "dns-in",
-      "listen": "127.0.0.1",
+      // nftables redirect rewrites the destination to the address of the
+      // interface the query arrived on, never to loopback, so listening on
+      // 127.0.0.1 would receive nothing at all
+      "listen": "0.0.0.0",
       "port": ${dns_port},
       "protocol": "dokodemo-door",
-      "settings": { "address": "1.1.1.1", "port": 53, "network": "udp" }
+      "settings": { "address": "1.1.1.1", "port": 53, "network": "tcp,udp" }
     }
   ],
   "outbounds": [

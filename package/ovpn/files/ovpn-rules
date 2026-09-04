@@ -19,11 +19,17 @@ set -e
 
 TABLE=ovpn
 MARK=0x162
+# Same value PassWall2 uses to mean "leave this alone", so anything that
+# already knows that convention keeps working here.
+BYPASS=0x000000ff
 
 . /lib/functions.sh
 config_load ovpn 2>/dev/null || true
 config_get tproxy_port config tproxy_port 1082
+config_get dns_port    config dns_port    1053
 config_get lan_zone    config lan_zone    ''
+config_get ipv6        config ipv6        'block'
+config_get_bool block_quic config block_quic 0
 
 lan_devices() {
 	if [ -n "$lan_zone" ]; then
@@ -61,6 +67,33 @@ cmd_up() {
 		iflist="$iflist\"$d\""
 	done
 
+	# QUIC is UDP, and a good many free servers carry UDP badly or not at all.
+	# Refusing it makes a browser fall straight back to TCP, which those same
+	# servers do carry. Off by default, because when UDP does work QUIC is the
+	# faster path.
+	QUIC_RULE=""
+	if [ "$block_quic" = "1" ]; then
+		QUIC_RULE="		meta l4proto udp th dport 443 reject"
+	fi
+
+	# IPv6 is the quiet way for everything to leave without the tunnel: the
+	# client prefers it, the rules above only speak IPv4, and nothing looks
+	# wrong from the inside. Almost no server on a free list carries IPv6, so
+	# the honest default is to refuse it while the tunnel is up and let the
+	# client fall back to IPv4 - which is tunnelled. Set ipv6 to "off" to
+	# leave it alone, on a connection that is IPv6 only.
+	V6_CHAIN=""
+	if [ "$ipv6" != "off" ]; then
+		V6_CHAIN="	chain block6 {
+		type filter hook forward priority filter; policy accept;
+
+		iifname != { $iflist } return
+		ip6 daddr @reserved6 return
+		meta mark $BYPASS return
+		meta nfproto ipv6 counter reject
+	}"
+	fi
+
 	nft -f - <<NFT
 table inet $TABLE {
 	set reserved {
@@ -73,15 +106,48 @@ table inet $TABLE {
 		}
 	}
 
+	set reserved6 {
+		type ipv6_addr
+		flags interval
+		elements = { ::1/128, fc00::/7, fe80::/10, ff00::/8 }
+	}
+
 	chain prerouting {
 		type filter hook prerouting priority mangle; policy accept;
 
 		iifname != { $iflist } return
-		ip daddr @reserved return
+		# A reply belongs to a connection that was already decided on its way
+		# out. Looking at it again only risks deciding differently.
+		ct direction reply return
+		# The way for anything else on this router to opt out, and the same
+		# mark PassWall2 honours, so the two agree on what it means.
+		meta mark $BYPASS return
+		# DNS is taken by the nat chain below, not here
 		meta l4proto { tcp, udp } th dport 53 return
-
+		ip daddr @reserved return
+		ip6 daddr @reserved6 return
+$QUIC_RULE
 		meta l4proto tcp tproxy ip to 127.0.0.1:$tproxy_port meta mark set $MARK accept
 		meta l4proto udp tproxy ip to 127.0.0.1:$tproxy_port meta mark set $MARK accept
+	}
+
+$V6_CHAIN
+	# Name lookups have to go through the tunnel too. A client asks the
+	# router, the router asks the local resolver, and where that resolver
+	# answers with whatever it has been told to answer, a tunnelled
+	# connection is then made to an address that was wrong before it left.
+	# That is why some sites open and others do not while the tunnel is up
+	# and working perfectly.
+	#
+	# This has to sit ahead of the reserved-address check above, because the
+	# address a client sends its query to is the router itself.
+	chain dns {
+		type nat hook prerouting priority dstnat; policy accept;
+
+		iifname != { $iflist } return
+		ct direction reply return
+		meta mark $BYPASS return
+		meta l4proto { tcp, udp } th dport 53 redirect to :$dns_port
 	}
 }
 NFT
