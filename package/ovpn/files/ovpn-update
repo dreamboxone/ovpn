@@ -188,6 +188,16 @@ cmd_test() {
 	done < "$CAND"
 	for _p in $pids; do wait "$_p" 2>/dev/null || true; done
 
+	# A measurement is only worth its result if the thing doing the measuring
+	# lasted through it. A hundred inbounds and twenty-five requests at once
+	# is real work for a router, and if the test instance dies part way the
+	# rest of the list fails for a reason that has nothing to do with those
+	# servers - and we would quietly pick from whatever answered before it
+	# went, believing the other ninety-odd unreachable.
+	if ! kill -0 "$xpid" 2>/dev/null; then
+		log "the test instance did not survive the measurement - $(wc -l < "$RESULTS") of $(wc -l < "$CAND") answered before it went, so those counts mean little"
+	fi
+
 	kill "$xpid" 2>/dev/null || true
 	wait "$xpid" 2>/dev/null || true
 
