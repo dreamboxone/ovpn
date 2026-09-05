@@ -50,8 +50,12 @@ function render(st) {
 	st = st || {};
 	setNode('ovpn-version', st.version ? 'v' + st.version : '');
 	setNode('ovpn-state', badge(st));
-	setNode('ovpn-server', st.connected ? (st.server || '-') : '-');
-	setNode('ovpn-latency', st.connected && st.latency_ms > 0 ? st.latency_ms + ' ms' : '-');
+	/* Show the pick as soon as there is one, not only once it is carrying
+	   traffic. The measurement runs when the page opens precisely so the
+	   reader can see which server they are about to connect to and how fast
+	   it answered - hiding that until after Connect wastes the whole thing. */
+	setNode('ovpn-server', st.server || '-');
+	setNode('ovpn-latency', st.latency_ms > 0 ? st.latency_ms + ' ms' : '-');
 
 	var busy = (st.status == 'selecting' || st.status == 'starting');
 	var connect = document.getElementById('ovpn-connect');

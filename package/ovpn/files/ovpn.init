@@ -16,11 +16,10 @@ CONFIG_JSON=/var/etc/ovpn.json
 STATE_DIR=/var/run/ovpn
 
 start_service() {
-	local enabled tproxy_port
+	local enabled
 
 	config_load ovpn
 	config_get_bool enabled config enabled 0
-	config_get tproxy_port config tproxy_port 1082
 	if [ "$enabled" != "1" ]; then
 		logger -t ovpn "not starting: press Connect first"
 		return 0
@@ -28,11 +27,11 @@ start_service() {
 
 	mkdir -p "$STATE_DIR" /var/etc /etc/ovpn
 
-	# Selecting a server is a minute of timed requests and must not happen
+	# Selecting a server is half a minute of timed requests and must not happen
 	# here: procd would be held for the whole measurement, and the service
 	# would be neither started nor failed while it waited. ovpn-connect does
 	# the measuring and then calls us. At boot there is a selection from last
-	# time, which is why the list is kept in /etc.
+	# time, which is why it is kept in /etc.
 	if [ ! -s /etc/ovpn/best.json ]; then
 		logger -t ovpn "no server selected - run ovpn-connect, or press Connect"
 		return 1
@@ -56,26 +55,44 @@ start_service() {
 	procd_open_instance ovpn
 	procd_set_param command "$PROG" run -config "$CONFIG_JSON"
 	procd_set_param respawn 3600 5 0
-	procd_set_param stdout 0
+	# xray's own complaints are the only explanation there is when it will not
+	# start, so let them reach the log
+	procd_set_param stdout 1
 	procd_set_param stderr 1
 	procd_set_param pidfile /var/run/ovpn.pid
 	procd_close_instance
+}
+
+# Nothing is running yet when start_service returns: procd_open_instance only
+# describes the service, and procd is not told to start it until rc.common
+# calls procd_close_service afterwards. Waiting for the socket in there was
+# waiting for a process nobody had started, so it always timed out and the
+# tunnel could never come up. rc.common calls this hook after the service is
+# actually running, which is where that wait belongs.
+service_started() {
+	local enabled tproxy_port n=0
+
+	config_load ovpn
+	config_get_bool enabled config enabled 0
+	config_get tproxy_port config tproxy_port 1082
+	[ "$enabled" = "1" ] || return 0
 
 	# The rules send every LAN packet to a port xray listens on, and name
-	# lookups to another. Install them before xray is actually listening and
-	# the entire network has nowhere to go - no web, no DNS, nothing, and no
-	# obvious reason why. So wait for the socket, and if it never appears,
-	# leave the network alone and say so.
-	n=0
+	# lookups to another. Install them before xray is listening and the whole
+	# network has nowhere to go - no web, no DNS, and no obvious reason why.
 	while [ $n -lt 20 ]; do
 		# /proc/net/tcp carries the local port in hex, so this needs no tools
-		grep -qi ":$(printf %04X "$tproxy_port") " /proc/net/tcp 2>/dev/null && break
+		if grep -qi ":$(printf %04X "$tproxy_port") " /proc/net/tcp 2>/dev/null; then
+			break
+		fi
 		n=$((n + 1))
 		sleep 1
 	done
 
 	if [ $n -ge 20 ]; then
 		logger -t ovpn "xray never started listening on $tproxy_port - leaving the network untouched"
+		logger -t ovpn "xray says: $(timeout 5 "$PROG" run -config "$CONFIG_JSON" 2>&1 | head -3 | tr "
+" " ")"
 		"$RULES" down >/dev/null 2>&1 || true
 		return 1
 	fi
@@ -85,6 +102,8 @@ start_service() {
 		"$RULES" down >/dev/null 2>&1 || true
 		return 1
 	fi
+
+	logger -t ovpn "tunnel up"
 }
 
 stop_service() {
