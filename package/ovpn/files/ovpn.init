@@ -63,6 +63,19 @@ start_service() {
 	procd_close_instance
 }
 
+# Is anything listening on this port? Ask three ways rather than one: a check
+# that cannot see a healthy listener is indistinguishable from a tunnel that
+# never came up, and it tears the tunnel down either way.
+listening() {
+	local hex
+	hex=$(printf %04X "$1" 2>/dev/null)
+	[ -n "$hex" ] || return 1
+	grep -qi ":$hex " /proc/net/tcp  2>/dev/null && return 0
+	grep -qi ":$hex " /proc/net/tcp6 2>/dev/null && return 0
+	netstat -ln 2>/dev/null | grep -q "[:.]$1[[:space:]]" && return 0
+	return 1
+}
+
 # Nothing is running yet when start_service returns: procd_open_instance only
 # describes the service, and procd is not told to start it until rc.common
 # calls procd_close_service afterwards. Waiting for the socket in there was
@@ -81,8 +94,7 @@ service_started() {
 	# lookups to another. Install them before xray is listening and the whole
 	# network has nowhere to go - no web, no DNS, and no obvious reason why.
 	while [ $n -lt 20 ]; do
-		# /proc/net/tcp carries the local port in hex, so this needs no tools
-		if grep -qi ":$(printf %04X "$tproxy_port") " /proc/net/tcp 2>/dev/null; then
+		if listening "$tproxy_port"; then
 			break
 		fi
 		n=$((n + 1))
@@ -91,6 +103,8 @@ service_started() {
 
 	if [ $n -ge 20 ]; then
 		logger -t ovpn "xray never started listening on $tproxy_port - leaving the network untouched"
+		logger -t ovpn "listening now: $(netstat -ln 2>/dev/null | awk '/LISTEN|udp/{print $4}' | tr "
+" " ")"
 		logger -t ovpn "xray says: $(timeout 5 "$PROG" run -config "$CONFIG_JSON" 2>&1 | head -3 | tr "
 " " ")"
 		"$RULES" down >/dev/null 2>&1 || true
