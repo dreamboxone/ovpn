@@ -48,6 +48,7 @@ function setNode(id, content) {
 
 function render(st) {
 	st = st || {};
+	setNode('ovpn-version', st.version ? 'v' + st.version : '');
 	setNode('ovpn-state', badge(st));
 	setNode('ovpn-server', st.connected ? (st.server || '-') : '-');
 	setNode('ovpn-latency', st.connected && st.latency_ms > 0 ? st.latency_ms + ' ms' : '-');
@@ -63,20 +64,33 @@ function render(st) {
 	/* Real progress, not a timer: the backend counts servers answered for.
 	   It fills to the end and stops there, which is the moment Connect
 	   becomes worth pressing. */
+	/* A full bar means every server was tried, which is not the same thing as
+	   one of them working: when the whole list is unreachable the sweep still
+	   finishes, and colouring that green beside "no server could be reached"
+	   told two opposite stories at once. Success decides the colour; the count
+	   only decides the width. */
+	var ok  = (st.connected || st.status == 'idle' || st.status == 'ready');
+	var bad = (st.status == 'failed');
+
 	var bar = document.getElementById('ovpn-bar');
 	var fill = document.getElementById('ovpn-fill');
 	var pct = 0;
 	if (st.total > 0) pct = Math.min(100, Math.round((st.tried || 0) * 100 / st.total));
-	if (st.connected || st.status == 'idle' || st.status == 'ready') pct = 100;
+	if (ok || bad) pct = 100;
 
-	if (bar) bar.style.display = (busy || pct == 100) ? 'block' : 'none';
+	if (bar) bar.style.display = (busy || ok || bad) ? 'block' : 'none';
 	if (fill) {
 		fill.style.width = pct + '%';
-		fill.style.background = pct == 100 ? '#10b981' : '#3b82f6';
+		fill.style.background = bad ? '#ef4444' : (ok ? '#10b981' : '#3b82f6');
 	}
-	setNode('ovpn-pct', busy && st.total > 0
-		? '%d%% · %d / %d'.format(pct, st.tried || 0, st.total)
-		: (pct == 100 ? _('Ready') : ''));
+	/* When nothing could be reached, the useful thing to know is how many of
+	   how many answered. Zero out of a hundred is not this program failing -
+	   it is the connection refusing every server on the list. */
+	setNode('ovpn-pct',
+		busy && st.total > 0 ? '%d%% · %d / %d'.format(pct, st.tried || 0, st.total)
+		: bad ? _('%d of %d servers answered').format(st.answered || 0, st.total || 0)
+		: ok ? _('Ready')
+		: '');
 }
 
 function act(name) {
@@ -144,7 +158,16 @@ return view.extend({
 			return callState().then(render).catch(function() {});
 		}, 3);
 
-		var page = E([], [ E('h2', {}, 'ovpn'), body ]);
+		var page = E([], [
+			E('h2', { 'style': 'display:flex;align-items:baseline;gap:10px' }, [
+				E('span', {}, 'ovpn'),
+				E('span', {
+					'id': 'ovpn-version',
+					'style': 'font-size:13px;font-weight:normal;opacity:.55'
+				}, '')
+			]),
+			body
+		]);
 		render(st);
 		return page;
 	},
