@@ -5,8 +5,8 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=ovpn
-PKG_VERSION:=1.0.0
-PKG_RELEASE:=11
+PKG_VERSION:=1.0.1
+PKG_RELEASE:=1
 
 PKG_MAINTAINER:=routekernel <https://t.me/routekernel1>
 PKG_LICENSE:=GPL-3.0-only
@@ -22,9 +22,9 @@ define Package/ovpn
 endef
 
 define Package/ovpn/description
- Sends every LAN device through a tunnel. Refreshes its server list daily,
- times a complete HTTP request through each server and connects through
- whichever answered fastest.
+ Sends every LAN device through a tunnel. Refreshes its server list every
+ quarter of an hour, times a complete HTTP request through each server and
+ connects through whichever answered fastest.
 endef
 
 define Package/ovpn/conffiles
@@ -48,6 +48,7 @@ define Package/ovpn/install
 	$(INSTALL_DIR) $(1)/usr/libexec
 	$(INSTALL_BIN) ./files/ovpn-update   $(1)/usr/libexec/ovpn-update
 	$(INSTALL_BIN) ./files/ovpn-connect  $(1)/usr/libexec/ovpn-connect
+	$(INSTALL_BIN) ./files/ovpn-refresh  $(1)/usr/libexec/ovpn-refresh
 	$(INSTALL_BIN) ./files/ovpn-parse    $(1)/usr/libexec/ovpn-parse
 	$(INSTALL_DATA) ./files/ovpn-common.sh $(1)/usr/libexec/ovpn-common.sh
 	$(INSTALL_BIN) ./files/ovpn-mkconfig $(1)/usr/libexec/ovpn-mkconfig
@@ -64,8 +65,8 @@ define Package/ovpn/postinst
 [ -n "$${IPKG_INSTROOT}" ] && exit 0
 mkdir -p /etc/ovpn /var/run/ovpn
 touch /etc/crontabs/root
-sed -i '\|/usr/libexec/ovpn-update|d' /etc/crontabs/root
-echo '0 21 * * * /usr/libexec/ovpn-update update >/dev/null 2>&1' >> /etc/crontabs/root
+sed -i '\|/usr/libexec/ovpn-|d' /etc/crontabs/root
+echo '*/15 * * * * /usr/libexec/ovpn-refresh >/dev/null 2>&1' >> /etc/crontabs/root
 /etc/init.d/cron reload >/dev/null 2>&1
 /etc/init.d/rpcd reload >/dev/null 2>&1
 exit 0
@@ -76,7 +77,7 @@ define Package/ovpn/prerm
 [ -n "$${IPKG_INSTROOT}" ] && exit 0
 /etc/init.d/ovpn stop >/dev/null 2>&1
 /etc/init.d/ovpn disable >/dev/null 2>&1
-sed -i '\|/usr/libexec/ovpn-update|d' /etc/crontabs/root 2>/dev/null
+sed -i '\|/usr/libexec/ovpn-|d' /etc/crontabs/root 2>/dev/null
 /etc/init.d/cron reload >/dev/null 2>&1
 exit 0
 endef

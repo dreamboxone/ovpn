@@ -7,8 +7,8 @@
 # packages.inc.sh - what goes into a package, shared by the .apk and .ipk
 # builders so the two formats can never drift apart.
 
-VERSION=1.0.0
-RELEASE=11
+VERSION=1.0.1
+RELEASE=1
 PKGVER="$VERSION-r$RELEASE"
 LICENSE="GPL-3.0-only"
 URL="https://github.com/dreamboxone/ovpn"
@@ -17,11 +17,12 @@ MAINTAINER="routekernel <https://t.me/routekernel1>"
 OVPN_DEPS="jshn libubox curl nftables kmod-nft-tproxy ip-full"
 LUCI_DEPS="ovpn luci-base"
 
-OVPN_DESC="Transparent proxy client for OpenWrt built on Xray. Refreshes its server list daily, times a real HTTP request through every server and connects through the fastest one."
+OVPN_DESC="Transparent proxy client for OpenWrt built on Xray. Refreshes its server list every quarter of an hour, times a real HTTP request through every server and connects through the fastest one."
 LUCI_DESC="Web interface for ovpn: connect, disconnect, and the state of the current connection."
 
-# The daily refresh. Twenty-one hundred, every day.
-CRON_LINE='0 21 * * * /usr/libexec/ovpn-update update >/dev/null 2>&1'
+# Every quarter of an hour. Reading the list is one small request, and the
+# script decides for itself whether measuring again is worth doing.
+CRON_LINE='*/15 * * * * /usr/libexec/ovpn-refresh >/dev/null 2>&1'
 
 # stage_ovpn <staging-root> <source-root> <xray-binary>
 stage_ovpn() {
@@ -40,6 +41,7 @@ stage_ovpn() {
 	install -m 0755 "$f/ovpn.init"       "$i/etc/init.d/ovpn"
 	install -m 0755 "$f/ovpn-update"     "$i/usr/libexec/ovpn-update"
 	install -m 0755 "$f/ovpn-connect"    "$i/usr/libexec/ovpn-connect"
+	install -m 0755 "$f/ovpn-refresh"    "$i/usr/libexec/ovpn-refresh"
 	install -m 0755 "$f/ovpn-parse"      "$i/usr/libexec/ovpn-parse"
 	install -m 0644 "$f/ovpn-common.sh"   "$i/usr/libexec/ovpn-common.sh"
 	install -m 0755 "$f/ovpn-mkconfig"   "$i/usr/libexec/ovpn-mkconfig"
@@ -55,7 +57,7 @@ stage_ovpn() {
 mkdir -p /etc/ovpn /var/run/ovpn
 # one crontab entry, and only one however often this package is reinstalled
 touch /etc/crontabs/root
-sed -i '\|/usr/libexec/ovpn-update|d' /etc/crontabs/root
+sed -i '\|/usr/libexec/ovpn-|d' /etc/crontabs/root
 echo '$CRON_LINE' >> /etc/crontabs/root
 # Every one of these takes a procd lock, and a lock held by something that
 # died leaves the call waiting for good - which would strand the install
@@ -69,7 +71,7 @@ EOF
 	cat > "$work/ovpn.prerm" <<'EOF'
 timeout 20 /etc/init.d/ovpn stop >/dev/null 2>&1 || true
 timeout 15 /etc/init.d/ovpn disable >/dev/null 2>&1 || true
-sed -i '\|/usr/libexec/ovpn-update|d' /etc/crontabs/root 2>/dev/null
+sed -i '\|/usr/libexec/ovpn-|d' /etc/crontabs/root 2>/dev/null
 timeout 15 /etc/init.d/cron reload >/dev/null 2>&1 || true
 exit 0
 EOF

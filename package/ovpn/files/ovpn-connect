@@ -8,6 +8,7 @@
 #
 #   ovpn-connect            select, then start the tunnel   (the Connect button)
 #   ovpn-connect prepare    select only                     (the page was opened)
+#   ovpn-connect force      measure again first             (the refresh, healing)
 #
 # Choosing means a timed request through each of a hundred servers, which
 # takes about half a minute. That cannot happen inside start_service: procd
@@ -65,6 +66,13 @@ if [ -s "$BEST" ]; then
 	if [ "$age" -ge 0 ] && [ "$age" -lt "$FRESH_SECONDS" ]; then
 		fresh=1
 	fi
+fi
+
+# The refresh calls this when the tunnel should be up and is not, which means
+# the server we picked has stopped working. Reusing that pick is the one thing
+# that cannot help.
+if [ "$MODE" = "force" ]; then
+	fresh=0
 fi
 
 if [ "$fresh" = "1" ]; then

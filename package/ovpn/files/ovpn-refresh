@@ -1,0 +1,43 @@
+#!/bin/sh
+#
+# SPDX-License-Identifier: GPL-3.0-only
+# Copyright (C) 2026 dreamboxone <https://t.me/routekernel1>
+# Part of ovpn - https://github.com/dreamboxone/ovpn
+#
+# ovpn-refresh - what the router does every quarter of an hour.
+#
+# Two jobs, and the difference between them is the whole reason this is a
+# separate script.
+#
+# Reading the list is cheap: one small request, a few kilobytes. Doing it
+# often is what keeps a free list useful, because servers on one appear and
+# disappear through the day and a list fetched this morning may name nothing
+# that still answers.
+#
+# Measuring is not cheap: a hundred timed requests, half a minute, and a
+# hundred listening ports. Doing that every quarter of an hour would be a
+# router spending its life measuring servers it is not using. So it happens
+# only when it would change something - when the tunnel is meant to be up and
+# is not, which is exactly the case where the server chosen earlier has
+# stopped working and a fresh list is worth acting on.
+
+set -e
+
+UPDATE=/usr/libexec/ovpn-update
+CONNECT=/usr/libexec/ovpn-connect
+
+# Read the source. A failure here is not worth reporting: the list already on
+# disk stays, and the next quarter hour will try again.
+"$UPDATE" fetch >/dev/null 2>&1 || true
+
+[ "$(uci -q get ovpn.config.enabled)" = "1" ] || exit 0
+
+# Already carrying traffic - leave it alone. Reconnecting a working tunnel to
+# chase a server that measured faster would drop every connection in progress
+# to win a few milliseconds.
+if pgrep -f "run -config /var/etc/ovpn.json" >/dev/null 2>&1; then
+	exit 0
+fi
+
+logger -t ovpn "tunnel should be up and is not - choosing again"
+exec "$CONNECT" force

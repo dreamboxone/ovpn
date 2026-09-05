@@ -1,15 +1,15 @@
 # ovpn — a router-wide tunnel for OpenWrt
 
-**Version 1.0.0** · support / contact: [t.me/routekernel1](https://t.me/routekernel1)
+**Version 1.0.1** · support / contact: [t.me/routekernel1](https://t.me/routekernel1)
 🇮🇷 **[راهنمای فارسی: README.fa.md](README.fa.md)**
 
 Install it, press **Connect**, and every device on your network goes through
 the tunnel. No settings on your phone, no settings on your laptop, no
 subscription to paste in.
 
-The router keeps a list of servers, refreshes it once a day, and measures
-them. Not a ping — a complete web request through each server, timed from
-start to finish. A server can answer a ping in 30 ms and still be unusable;
+The router keeps a list of servers, reads a fresh one every quarter of an
+hour, and measures them. Not a ping — a complete web request through each
+server, timed from start to finish. A server can answer a ping in 30 ms and still be unusable;
 only a request that finishes proves the route works. The fastest server wins,
 and that is the one you get.
 
@@ -74,13 +74,15 @@ The page has two buttons and three lines.
 
 | Line | Meaning |
 |---|---|
-| **Status** | `Disconnected` · `Connecting…` · `Connected` |
+| **Status** | `Disconnected` · `Finding the fastest server…` · `Ready to connect` · `Connected` |
 | **Server** | Which country the traffic comes out in |
 | **Latency** | How long a full web request took through that server when it was measured |
 
-The first **Connect** takes longer than the ones after it: the router is
-measuring every server before choosing. After that the choice is already made
-and connecting is quick.
+Measuring starts when the page opens, not when you press the button, so by
+the time you have read this far the router is usually already done. A bar
+fills as it works — it counts servers actually answered for, not seconds
+guessed at — and turns green when there is an answer. Connect from there is
+immediate.
 
 Once connected, every device on the network is tunnelled — phones, laptops,
 televisions, consoles. None of them need to be configured, and nothing needs
@@ -116,7 +118,7 @@ ssh root@192.168.1.1
 apk del luci-app-ovpn ovpn          # opkg remove ... on 24.10 and older
 ```
 
-That removes the service, the Xray core and the web page, and takes the daily
+That removes the service, the Xray core and the web page, and takes the
 refresh out of the router's schedule.
 
 Removing the packages leaves your settings behind on purpose, so reinstalling
@@ -134,10 +136,12 @@ when you press **Disconnect** or stop the service.
 
 ## 4. If something does not work
 
-**The page says `Connecting…` and stays there.** No server answered a test
-request. That usually means the connection the router itself has is blocking
-everything; the daily refresh at 21:00 will try a new list, or press
-**Disconnect** and **Connect** to measure again straight away.
+**It says no server could be reached.** Not one server on the list answered a
+test request, which usually means the connection the router itself has is
+blocking them rather than that the list is bad. The router reads a new list
+every quarter of an hour and, whenever the tunnel is meant to be up and is
+not, measures again and reconnects on its own — so leaving it alone for a
+while is often enough. Pressing **Connect** measures again straight away.
 
 **Some devices are not tunnelled.** Only devices on the router's LAN go
 through it. A device on a guest network or a second router of its own will
@@ -154,3 +158,13 @@ Support and contact: [t.me/routekernel1](https://t.me/routekernel1)
 ## 5. Licence
 
 GPL-3.0-only. Xray-core is licensed by its own authors under MPL-2.0.
+
+---
+
+## 6. Thanks
+
+The servers come from the **TOP 100** collection published by
+[@Raydikalx](https://t.me/raydikalx), gathered and kept current as free,
+public work. This project does not run a single server of its own: it
+measures what that list offers and picks whichever answers fastest from where
+you are. Without that list there would be nothing here to measure. Thank you.
