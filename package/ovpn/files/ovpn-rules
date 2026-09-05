@@ -92,9 +92,12 @@ cmd_up() {
 	# Refusing it makes a browser fall straight back to TCP, which those same
 	# servers do carry. Off by default, because when UDP does work QUIC is the
 	# faster path.
+	# nftables has no reject in prerouting, so this belongs on the forward
+	# hook with the IPv6 one. Putting it in prerouting made the whole ruleset
+	# fail to load the moment anyone turned it on.
 	QUIC_RULE=""
 	if [ "$block_quic" = "1" ]; then
-		QUIC_RULE="		meta l4proto udp th dport 443 reject"
+		QUIC_RULE="		meta l4proto udp th dport 443 counter reject"
 	fi
 
 	# IPv6 is the quiet way for everything to leave without the tunnel: the
@@ -103,15 +106,21 @@ cmd_up() {
 	# the honest default is to refuse it while the tunnel is up and let the
 	# client fall back to IPv4 - which is tunnelled. Set ipv6 to "off" to
 	# leave it alone, on a connection that is IPv6 only.
-	V6_CHAIN=""
+	V6_RULE=""
 	if [ "$ipv6" != "off" ]; then
-		V6_CHAIN="	chain block6 {
+		V6_RULE="		ip6 daddr @reserved6 return
+		meta nfproto ipv6 counter reject"
+	fi
+
+	FORWARD_CHAIN=""
+	if [ -n "$V6_RULE" ] || [ -n "$QUIC_RULE" ]; then
+		FORWARD_CHAIN="	chain forward {
 		type filter hook forward priority filter; policy accept;
 
 		iifname != { $iflist } return
-		ip6 daddr @reserved6 return
 		meta mark $BYPASS return
-		meta nfproto ipv6 counter reject
+$V6_RULE
+$QUIC_RULE
 	}"
 	fi
 
@@ -147,12 +156,11 @@ table inet $TABLE {
 		meta l4proto { tcp, udp } th dport 53 return
 		ip daddr @reserved return
 		ip6 daddr @reserved6 return
-$QUIC_RULE
 		meta l4proto tcp tproxy ip to 127.0.0.1:$tproxy_port meta mark set $MARK accept
 		meta l4proto udp tproxy ip to 127.0.0.1:$tproxy_port meta mark set $MARK accept
 	}
 
-$V6_CHAIN
+$FORWARD_CHAIN
 	# Name lookups have to go through the tunnel too. A client asks the
 	# router, the router asks the local resolver, and where that resolver
 	# answers with whatever it has been told to answer, a tunnelled

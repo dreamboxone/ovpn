@@ -92,6 +92,15 @@ if [ "$MODE" = "prepare" ]; then
 fi
 
 if timeout 60 /etc/init.d/ovpn restart >/dev/null 2>&1; then
+	# autostart was a setting nothing read: the boot symlink was never made,
+	# so the tunnel could not come back after a power cut whatever it said.
+	# Done here rather than inside the init script, which would be asking the
+	# init script to run itself and wait on a lock it is already holding.
+	if [ "$(uci -q get ovpn.config.autostart)" = "1" ]; then
+		timeout 15 /etc/init.d/ovpn enable >/dev/null 2>&1 || true
+	else
+		timeout 15 /etc/init.d/ovpn disable >/dev/null 2>&1 || true
+	fi
 	say ready
 else
 	# A failed start must not leave the network pointing at a tunnel that

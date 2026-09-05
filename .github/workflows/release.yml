@@ -88,6 +88,25 @@ jobs:
           ./prebuilt/x86_64/xray run -test -config cfg.json
           echo "== xray accepts the generated configuration"
 
+          # Accepting a configuration and being able to serve it are different
+          # things, and the difference is where this went wrong on a real
+          # router: xray read the file, said nothing, stayed alive and never
+          # listened. Start it for real and look for the socket.
+          sudo ./prebuilt/x86_64/xray run -config cfg.json > xray.log 2>&1 &
+          xpid=$!
+          for i in $(seq 1 15); do
+            if ss -lntu 2>/dev/null | grep -qE '[:.](1082|1053)[[:space:]]'; then break; fi
+            sleep 1
+          done
+          ss -lntu 2>/dev/null | grep -E '[:.](1082|1053)[[:space:]]' || {
+            echo "::error::xray started but never listened"
+            echo "--- xray said:"; cat xray.log
+            sudo kill $xpid 2>/dev/null || true
+            exit 1
+          }
+          echo "== xray listens on the tproxy and dns ports"
+          sudo kill $xpid 2>/dev/null || true
+
       - name: Fetch the apk tool from an OpenWrt SDK
         run: |
           set -euo pipefail
