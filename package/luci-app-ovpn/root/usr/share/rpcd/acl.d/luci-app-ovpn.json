@@ -3,7 +3,7 @@
 		"description": "Grant access to ovpn",
 		"read": {
 			"ubus": {
-				"luci.ovpn": [ "state" ]
+				"luci.ovpn": [ "state", "traffic", "nodes", "subs", "system" ]
 			},
 			"uci": [ "ovpn" ]
 		},

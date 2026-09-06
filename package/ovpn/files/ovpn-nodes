@@ -1,0 +1,171 @@
+#!/bin/sh
+#
+# SPDX-License-Identifier: GPL-3.0-only
+# Copyright (C) 2026 dreamboxone <https://t.me/routekernel1>
+# Part of ovpn - https://github.com/dreamboxone/ovpn
+#
+# ovpn-nodes - where the servers come from.
+#
+#   ovpn-nodes fetch    re-read every enabled subscription
+#   ovpn-nodes build    turn what we have into candidates
+#   ovpn-nodes update   both
+#   ovpn-nodes status   one line per subscription, for the web interface
+#
+# Subscriptions and hand-added nodes both live in /etc/config/ovpn, as
+# `config subscription` and `config node` sections. Adding either is a UCI
+# edit and nothing more, which is what lets the web interface offer it
+# without this script needing to know the web interface exists.
+
+set -e
+
+. "${OVPN_LIB:-/usr/libexec}/ovpn-common.sh"
+. /lib/functions.sh
+
+PARSE="${OVPN_LIB:-/usr/libexec}/ovpn-parse"
+LINKS="$OVPN_RUN/links.txt"
+SUBS_STATUS="$OVPN_RUN/subs.status"
+
+# ---------------------------------------------------------------- fetching
+
+fetch_one() {
+	_sec="$1"
+	local url name enabled
+	config_get url "$_sec" url ""
+	config_get name "$_sec" name "$_sec"
+	config_get_bool enabled "$_sec" enabled 1
+
+	[ "$enabled" = "1" ] || return 0
+	[ -n "$url" ] || return 0
+
+	_tmp="$OVPN_RUN/sub.$_sec"
+	if ! curl -fsSL --connect-timeout 15 --max-time 90 --retry 1 -o "$_tmp" "$url" 2>/dev/null; then
+		printf '%s\t%s\t0\t0\t%s\n' "$name" "$url" "download failed" >> "$SUBS_STATUS"
+		warn "subscription '$name': download failed"
+		rm -f "$_tmp"
+		return 0
+	fi
+
+	# A subscription that answers with an error page, a login form or half a
+	# file must never replace what we already have.
+	if [ "$(wc -c < "$_tmp")" -lt 64 ]; then
+		printf '%s\t%s\t0\t0\t%s\n' "$name" "$url" "answer too short" >> "$SUBS_STATUS"
+		warn "subscription '$name': answer too short"
+		rm -f "$_tmp"
+		return 0
+	fi
+
+	# Most providers hand back one base64 blob rather than a list of links.
+	if ! grep -q '://' "$_tmp" 2>/dev/null; then
+		if LC_ALL=C awk -v DECODE=1 -f "$PARSE" < "$_tmp" > "$_tmp.dec" 2>/dev/null &&
+		   grep -q '://' "$_tmp.dec" 2>/dev/null; then
+			mv -f "$_tmp.dec" "$_tmp"
+		else
+			rm -f "$_tmp.dec"
+			printf '%s\t%s\t0\t0\t%s\n' "$name" "$url" "nothing that looks like a server link" >> "$SUBS_STATUS"
+			warn "subscription '$name': nothing that looks like a server link"
+			rm -f "$_tmp"
+			return 0
+		fi
+	fi
+
+	_count="$(grep -c '://' "$_tmp" 2>/dev/null || echo 0)"
+	cat "$_tmp" >> "$OVPN_RUN/links.new"
+	echo >> "$OVPN_RUN/links.new"
+	printf '%s\t%s\t%s\t%s\t\n' "$name" "$url" "$_count" "$(date +%s)" >> "$SUBS_STATUS"
+	rm -f "$_tmp"
+	return 0
+}
+
+cmd_fetch() {
+	: > "$OVPN_RUN/links.new"
+	: > "$SUBS_STATUS"
+
+	config_load ovpn
+	config_foreach fetch_one subscription
+
+	if ! grep -q '://' "$OVPN_RUN/links.new" 2>/dev/null; then
+		rm -f "$OVPN_RUN/links.new"
+		# Every source failed. The copy on disk is the whole reason there is
+		# one: a router that reboots into a censored morning still has last
+		# night's list and can still connect.
+		if [ -s "$OVPN_NODE_CACHE" ]; then
+			log "no subscription answered - keeping the list already on disk"
+			cp -f "$OVPN_NODE_CACHE" "$LINKS"
+			return 0
+		fi
+		say_message "No subscription could be read, and there is no saved list to fall back on"
+		warn "no subscription answered and nothing saved"
+		return 1
+	fi
+
+	mv -f "$OVPN_RUN/links.new" "$LINKS"
+
+	# Written to flash only when it actually differs. Refreshed every quarter
+	# of an hour, an unconditional copy would be thirty-five thousand writes a
+	# year of a file that is usually identical to the one already there.
+	if write_if_changed "$LINKS" "$OVPN_NODE_CACHE"; then
+		log "server list changed - saved"
+	fi
+	return 0
+}
+
+# ---------------------------------------------------------------- building
+
+add_node() {
+	_sec="$1"
+	local link enabled
+	config_get link "$_sec" link ""
+	config_get_bool enabled "$_sec" enabled 1
+	[ "$enabled" = "1" ] || return 0
+	[ -n "$link" ] || return 0
+	# One section may hold several links pasted at once.
+	printf '%s\n' "$link" | tr ' ' '\n' >> "$OVPN_RUN/manual.txt"
+	return 0
+}
+
+cmd_build() {
+	_src="$LINKS"
+	[ -s "$_src" ] || _src="$OVPN_NODE_CACHE"
+
+	: > "$OVPN_RUN/build.txt"
+	[ -s "$_src" ] && cat "$_src" >> "$OVPN_RUN/build.txt"
+
+	# Hand-added nodes go in ahead of the subscriptions. They were typed in on
+	# purpose, so when a limit has to bite it should bite the free list first.
+	: > "$OVPN_RUN/manual.txt"
+	config_load ovpn
+	config_foreach add_node node
+	if [ -s "$OVPN_RUN/manual.txt" ]; then
+		cat "$OVPN_RUN/build.txt" >> "$OVPN_RUN/manual.txt"
+		mv -f "$OVPN_RUN/manual.txt" "$OVPN_RUN/build.txt"
+	fi
+	rm -f "$OVPN_RUN/manual.txt"
+
+	_limit="$(cfg max_nodes 300)"
+	LC_ALL=C awk -v LIMIT="$_limit" -f "$PARSE" < "$OVPN_RUN/build.txt" > "$OVPN_CANDIDATES.new" 2>/dev/null || true
+	rm -f "$OVPN_RUN/build.txt"
+
+	if [ ! -s "$OVPN_CANDIDATES.new" ]; then
+		rm -f "$OVPN_CANDIDATES.new"
+		say_message "Nothing in the list could be read as a server"
+		warn "no usable servers in the list"
+		return 1
+	fi
+
+	mv -f "$OVPN_CANDIDATES.new" "$OVPN_CANDIDATES"
+	log "$(wc -l < "$OVPN_CANDIDATES") servers to choose from"
+	return 0
+}
+
+cmd_status() {
+	cat "$SUBS_STATUS" 2>/dev/null || true
+	return 0
+}
+
+case "${1:-update}" in
+	fetch)  cmd_fetch ;;
+	build)  cmd_build ;;
+	update) cmd_fetch || true; cmd_build ;;
+	status) cmd_status ;;
+	*) echo "usage: $0 fetch|build|update|status" >&2; exit 1 ;;
+esac

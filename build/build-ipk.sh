@@ -49,7 +49,9 @@ finalize() {
 	find "$idir" -type d -exec chmod 0755 {} +
 	find "$idir" -type f -exec chmod 0644 {} +
 	for d in usr/bin usr/sbin etc/init.d usr/libexec usr/libexec/rpcd usr/libexec/ovpn; do
-		[ -d "$idir/$d" ] && find "$idir/$d" -maxdepth 1 -type f -exec chmod 0755 {} +
+		if [ -d "$idir/$d" ]; then
+			find "$idir/$d" -maxdepth 1 -type f -exec chmod 0755 {} +
+		fi
 	done
 	chown -R 0:0 "$idir"
 

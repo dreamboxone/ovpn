@@ -1,0 +1,342 @@
+/*
+ * SPDX-License-Identifier: GPL-3.0-only
+ * Copyright (C) 2026 dreamboxone <https://t.me/routekernel1>
+ * Part of ovpn - https://github.com/dreamboxone/ovpn
+ *
+ * Settings, plus the three things that have to be fetched rather than typed:
+ * the routing data, the cores, and whatever the router is missing.
+ */
+
+'use strict';
+'require view';
+'require form';
+'require rpc';
+'require poll';
+'require ui';
+
+var callSystem = rpc.declare({ object: 'luci.ovpn', method: 'system', expect: { '': {} } });
+var callAction = rpc.declare({ object: 'luci.ovpn', method: 'action',
+                               params: [ 'name', 'arg' ], expect: { '': {} } });
+
+function bytes(n) {
+	n = Number(n) || 0;
+	if (n >= 1073741824) return (n / 1073741824).toFixed(2) + ' GB';
+	if (n >= 1048576) return (n / 1048576).toFixed(1) + ' MB';
+	if (n >= 1024) return Math.round(n / 1024) + ' KB';
+	return n + ' B';
+}
+
+function pill(text, colour) {
+	return E('span', {
+		'style': 'background:' + colour + ';color:#fff;border-radius:9px;padding:1px 9px;' +
+		         'font-size:11px;font-weight:600;white-space:nowrap'
+	}, text);
+}
+
+function yes() { return pill(_('yes'), '#10b981'); }
+function no()  { return pill(_('no'), '#ef4444'); }
+
+function row(label, value, action) {
+	return E('div', {
+		'style': 'display:flex;gap:12px;align-items:center;padding:7px 0;flex-wrap:wrap;' +
+		         'border-bottom:1px solid rgba(127,127,127,.14)'
+	}, [
+		E('div', { 'style': 'flex:0 0 150px;font-weight:600;font-size:13px' }, label),
+		E('div', { 'style': 'flex:1 1 200px;font-size:13px;display:flex;gap:8px;' +
+		                    'align-items:center;flex-wrap:wrap' }, value),
+		E('div', { 'style': 'flex:0 0 auto;display:flex;gap:6px' }, action || [])
+	]);
+}
+
+function btn(text, cls, fn) {
+	return E('button', {
+		'class': 'btn cbi-button ' + cls,
+		'style': 'padding:3px 12px;font-size:12px',
+		'click': ui.createHandlerFn(null, fn)
+	}, text);
+}
+
+function act(name, arg, note) {
+	return callAction(name, arg || '').then(function() {
+		if (note) ui.addNotification(null, E('p', {}, note), 'info');
+	});
+}
+
+function renderSystem(d) {
+	d = d || {};
+	var geo = d.geo || {}, cores = d.cores || {}, deps = d.deps || {};
+
+	var job = document.getElementById('ovpn-job');
+	if (job) {
+		job.style.display = d.job ? 'block' : 'none';
+		job.textContent = d.job ? d.job + '…' : '';
+	}
+
+	/* ---- what the router can actually do ---- */
+	var can = deps.can || {};
+	var dbox = document.getElementById('ovpn-deps');
+	if (dbox) {
+		while (dbox.firstChild) dbox.removeChild(dbox.firstChild);
+		dbox.appendChild(row(_('Transparent proxy'),
+			[ can.tproxy ? yes() : no(),
+			  E('span', { 'style': 'opacity:.65' },
+			    can.tproxy ? _('the kernel can redirect traffic')
+			               : _('the kernel module for this is missing — nothing will be tunnelled')) ]));
+		dbox.appendChild(row(_('Policy routing'),
+			[ can.policy_routing ? yes() : no(),
+			  E('span', { 'style': 'opacity:.65' },
+			    can.policy_routing ? _('the full ip command is installed')
+			                       : _('busybox ip cannot add the route this needs — install ip-full')) ]));
+		dbox.appendChild(row(_('HTTPS'),
+			[ can.https ? yes() : no(),
+			  E('span', { 'style': 'opacity:.65' },
+			    can.https ? _('the router can fetch over HTTPS')
+			              : _('certificates are missing or the connection is blocked — nothing can be downloaded')) ]));
+		dbox.appendChild(row(_('Firewall in use'),
+			[ E('span', {}, deps.backend == 'nft' ? 'nftables'
+			              : deps.backend == 'ipt' ? 'iptables' : _('none found')) ]));
+
+		var missing = deps.missing || [];
+		dbox.appendChild(row(_('Packages'),
+			missing.length
+				? [ pill(_('%d missing').format(missing.length), '#f59e0b'),
+				    E('span', { 'style': 'opacity:.75;font-family:monospace;font-size:12px' },
+				      missing.join(' ')) ]
+				: [ yes(), E('span', { 'style': 'opacity:.65' }, _('everything needed is installed')) ],
+			missing.length
+				? [ btn(_('Install them'), 'cbi-button-apply', function() {
+						return act('deps_install', '', _('Installing. This needs a working connection and may take a minute.'));
+					}) ]
+				: []));
+	}
+
+	/* ---- the routing data ---- */
+	var gbox = document.getElementById('ovpn-geo');
+	if (gbox) {
+		while (gbox.firstChild) gbox.removeChild(gbox.firstChild);
+		[ [ 'geoip', _('Addresses (geoip.dat)') ], [ 'geosite', _('Names (geosite.dat)') ] ]
+			.forEach(function(p) {
+				var f = geo[p[0]] || {};
+				gbox.appendChild(row(p[1],
+					f.present
+						? [ pill(bytes(f.bytes), '#10b981'),
+						    E('span', { 'style': 'opacity:.6;font-size:12px' },
+						      f.updated ? new Date(f.updated * 1000).toLocaleString() : '') ]
+						: [ pill(_('not downloaded'), '#94a3b8') ],
+					[ btn(f.present ? _('Update') : _('Download'), 'cbi-button-apply', function() {
+							return act('geo_update', p[0],
+								_('Downloading. The page will show the new size when it is done.'));
+						}) ]));
+			});
+		gbox.appendChild(row(_('Free space'),
+			[ E('span', {}, bytes(geo.free)),
+			  E('span', { 'style': 'opacity:.6' }, geo.dir || '') ],
+			geo.geoip && geo.geoip.present
+				? [ btn(_('Remove both'), 'cbi-button-remove', function() {
+						return act('geo_remove', '', _('Routing data removed.'));
+					}) ]
+				: []));
+		gbox.appendChild(E('div', {
+			'style': 'font-size:12px;opacity:.7;margin-top:8px;line-height:1.6'
+		}, _('The full files are about 17 MB and 8 MB. If they will not fit, the same project publishes geoip-lite.dat (38 KB) and geosite-lite.dat (2 MB), which carry the Iranian categories and nothing else — put those addresses in the boxes above. A download that will not fit is refused rather than half written.')));
+	}
+
+	/* ---- the cores ---- */
+	var cbox = document.getElementById('ovpn-cores');
+	if (cbox) {
+		while (cbox.firstChild) cbox.removeChild(cbox.firstChild);
+		(cores.cores || []).forEach(function(c) {
+			var value = [];
+			if (c.installed) {
+				value.push(pill(c.version || _('installed'), '#10b981'));
+				value.push(E('span', { 'style': 'opacity:.6;font-size:12px;font-family:monospace' },
+					c.path));
+				if (!c.ours)
+					value.push(E('span', { 'style': 'opacity:.75;font-size:12px' },
+						_('(installed by another package — left alone)')));
+			} else if (!c.arch_ok) {
+				value.push(pill(_('no build for this router'), '#94a3b8'));
+			} else {
+				value.push(pill(_('not installed'), '#94a3b8'));
+			}
+
+			var actions = [];
+			if (c.arch_ok)
+				actions.push(btn(c.installed ? _('Update') : _('Install'), 'cbi-button-apply', function() {
+					return act('core_install', c.name, _('Downloading %s.').format(c.name));
+				}));
+			if (c.installed && c.ours && c.name != 'xray')
+				actions.push(btn(_('Remove'), 'cbi-button-remove', function() {
+					return act('core_remove', c.name, _('%s removed.').format(c.name));
+				}));
+
+			cbox.appendChild(row(c.name, value, actions));
+		});
+		cbox.appendChild(row(_('Free space'),
+			[ E('span', {}, bytes(cores.free)),
+			  E('span', { 'style': 'opacity:.6' }, cores.dir || '') ]));
+		cbox.appendChild(E('div', {
+			'style': 'font-size:12px;opacity:.7;margin-top:8px;line-height:1.6'
+		}, _('Xray carries the traffic. sing-box and hysteria are only needed for servers that speak hysteria2 or tuic, which Xray does not — one of them is then run as a local helper for that one server, and everything else works exactly as before.')));
+	}
+}
+
+return view.extend({
+	load: function() {
+		return callSystem().catch(function() { return {}; });
+	},
+
+	render: function(data) {
+		var m, s, o;
+
+		m = new form.Map('ovpn', _('Settings'));
+
+		/* ------------------------------------------------------- routing */
+		s = m.section(form.NamedSection, 'config', 'ovpn', _('Routing'));
+		s.anonymous = true;
+
+		o = s.option(form.Flag, 'route_ir', _('Send Iranian traffic direct'),
+			_('Iranian sites and addresses skip the tunnel. Needs the routing data below — until that is downloaded this does nothing, because a core asked for a geo file it has not got refuses to start rather than carrying on without it.'));
+		o.rmempty = false;
+
+		o = s.option(form.Value, 'geoip_url', _('Address data'),
+			_('Where geoip.dat comes from.'));
+		o.depends('route_ir', '1');
+
+		o = s.option(form.Value, 'geosite_url', _('Name data'),
+			_('Where geosite.dat comes from.'));
+		o.depends('route_ir', '1');
+
+		o = s.option(form.Value, 'ir_dns', _('Iranian resolver'),
+			_('Used for Iranian names when the split is on. It has to be inside Iran, or an Iranian CDN answers with a foreign edge and “direct” takes the long way round.'));
+		o.depends('route_ir', '1');
+		o.placeholder = '178.22.122.100';
+
+		o = s.option(form.Flag, 'block_ads', _('Block advertising'),
+			_('Also needs the routing data.'));
+		o.rmempty = false;
+
+		o = s.option(form.Flag, 'block_torrent', _('Block BitTorrent'),
+			_('BitTorrent through a free server is how a free server stops existing.'));
+		o.default = '1';
+		o.rmempty = false;
+
+		/* ------------------------------------------------------- network */
+		s = m.section(form.NamedSection, 'config', 'ovpn', _('Network'));
+		s.anonymous = true;
+
+		o = s.option(form.ListValue, 'dns_mode', _('Name lookups'),
+			_('“Through dnsmasq” keeps local machine names and DHCP names working and moves only the outside lookups into the tunnel. “Straight into the tunnel” resolves outside names and loses the ones on your own network.'));
+		o.value('dnsmasq', _('Through dnsmasq (recommended)'));
+		o.value('direct', _('Straight into the tunnel'));
+		o.value('off', _('Leave alone'));
+		o.default = 'dnsmasq';
+
+		o = s.option(form.Flag, 'dns_hijack', _('Catch hardcoded resolvers'),
+			_('A phone set to ask 8.8.8.8 directly gets answers from outside the tunnel and then connects to whatever it was told. This forces those queries back through the router.'));
+		o.default = '1';
+		o.rmempty = false;
+
+		o = s.option(form.ListValue, 'ipv6', _('IPv6'),
+			_('Almost no server on a free list carries IPv6, and a client that prefers it leaves without the tunnel while looking perfectly fine. Refusing it makes the client fall back to IPv4, which is tunnelled.'));
+		o.value('block', _('Refuse it while connected (recommended)'));
+		o.value('off', _('Leave it alone'));
+		o.default = 'block';
+
+		o = s.option(form.Flag, 'block_quic', _('Refuse QUIC'),
+			_('Makes browsers fall back to TCP. Worth turning on when the chosen server carries UDP badly; off by default, because where UDP works QUIC is faster.'));
+		o.rmempty = false;
+
+		o = s.option(form.ListValue, 'firewall_backend', _('Firewall'),
+			_('Automatic is right unless this router has both and the wrong one is being picked.'));
+		o.value('auto', _('Choose automatically'));
+		o.value('nftables', 'nftables');
+		o.value('iptables', 'iptables');
+		o.default = 'auto';
+
+		o = s.option(form.Value, 'lan_zone', _('Interfaces to tunnel'),
+			_('Empty means every LAN interface. Otherwise a space separated list of device names, for example “br-lan”.'));
+		o.placeholder = _('every LAN interface');
+
+		o = s.option(form.Flag, 'autostart', _('Reconnect after a reboot'));
+		o.rmempty = false;
+
+		/* ------------------------------------------------------ choosing */
+		s = m.section(form.NamedSection, 'config', 'ovpn', _('Choosing a server'),
+			_('Every server is checked cheaply first, and only the ones that answered are measured properly, ten at a time, best first — stopping at the first one fast enough. That is why connecting takes seconds rather than the best part of a minute.'));
+		s.anonymous = true;
+
+		o = s.option(form.ListValue, 'prefilter', _('First pass'),
+			_('A TCP handshake to the server’s real port is the right test. A ping is cheaper and wrong often enough to matter: a server behind a CDN answers pings at the edge whatever state the server is in, and plenty of working servers drop ICMP entirely.'));
+		o.value('tcp', _('TCP handshake (recommended)'));
+		o.value('icmp', _('Ping'));
+		o.value('both', _('Ping, then handshake'));
+		o.default = 'tcp';
+
+		o = s.option(form.Value, 'good_ms', _('Good enough (ms)'),
+			_('The first server measured faster than this is the one used. Lower means a better server and a longer wait.'));
+		o.datatype = 'uinteger';
+		o.default = '1000';
+
+		o = s.option(form.Value, 'batch_size', _('Measured at a time'));
+		o.datatype = 'range(1,50)';
+		o.default = '10';
+
+		o = s.option(form.Value, 'max_batches', _('Batches at most'),
+			_('How far down the list to keep going when nothing is fast enough.'));
+		o.datatype = 'range(1,30)';
+		o.default = '5';
+
+		o = s.option(form.Value, 'sift_parallel', _('Checked at once'),
+			_('How many handshakes run in parallel in the first pass. Lower this on a router that struggles.'));
+		o.datatype = 'range(1,100)';
+		o.default = '30';
+
+		/* -------------------------------------------------------- traffic */
+		s = m.section(form.NamedSection, 'config', 'ovpn', _('Traffic counting'));
+		s.anonymous = true;
+
+		o = s.option(form.Value, 'stats_flush_seconds', _('Save to flash every (s)'),
+			_('Totals are added up in memory every five minutes; this is how often that sum is written to storage. Lower loses less to a power cut and wears the flash faster. An hour is a sensible compromise.'));
+		o.datatype = 'uinteger';
+		o.default = '3600';
+
+		var self = this;
+
+		return m.render().then(function(mapEl) {
+			var extra = E('div', { 'style': 'margin-top:24px' }, [
+				E('div', {
+					'id': 'ovpn-job',
+					'style': 'display:none;margin-bottom:14px;padding:9px 12px;border-radius:7px;' +
+					         'background:rgba(139,92,246,.14);border:1px solid rgba(139,92,246,.4);' +
+					         'font-size:13px'
+				}, ''),
+
+				E('h3', {}, _('Does this router have what it needs?')),
+				E('p', { 'style': 'font-size:13px;opacity:.7;margin:0 0 6px 0' },
+					_('These are questions put to the running system, not a list of package names. A package can be installed and the thing it provides still not work.')),
+				E('div', { 'id': 'ovpn-deps' }, []),
+
+				E('h3', { 'style': 'margin-top:24px' }, _('Routing data')),
+				E('div', { 'id': 'ovpn-geo' }, []),
+
+				E('h3', { 'style': 'margin-top:24px' }, _('Cores')),
+				E('div', { 'id': 'ovpn-cores' }, []),
+
+				E('h3', { 'style': 'margin-top:24px' }, _('Traffic history')),
+				E('div', { 'style': 'padding:8px 0' }, [
+					btn(_('Forget all recorded traffic'), 'cbi-button-remove', function() {
+						return act('stats_reset', '', _('Traffic history cleared.'));
+					})
+				])
+			]);
+
+			poll.add(function() {
+				return callSystem().then(renderSystem).catch(function() {});
+			}, 5);
+
+			renderSystem(data);
+			return E([], [ mapEl, extra ]);
+		});
+	}
+});
