@@ -138,7 +138,8 @@ jobs:
           cat > best.json <<'EOF'
           {"protocol":"freedom"}
           EOF
-          OVPN_ETC="$PWD" OVPN_RUN="$PWD" sh package/ovpn/files/ovpn-mkconfig > cfg.json
+          OVPN_LIB="$PWD/package/ovpn/files" OVPN_ETC="$PWD" OVPN_RUN="$PWD" \
+            sh package/ovpn/files/ovpn-mkconfig > cfg.json
           ./prebuilt/x86_64/xray run -test -config cfg.json
           sudo ./prebuilt/x86_64/xray run -config cfg.json > xray.log 2>&1 &
           xpid=$!
