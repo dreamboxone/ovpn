@@ -2,17 +2,21 @@
 # Copyright (C) 2026 dreamboxone <https://t.me/routekernel1>
 # Part of ovpn - https://github.com/dreamboxone/ovpn
 #
-# Build installable OpenWrt packages in both formats and publish them.
+# Check everything, build installable packages in both formats, and publish
+# them.
 #
-# Triggered by pushing a version tag:
+# Tests run on every push and every pull request. Packages are built for a
+# version tag, or by hand:
 #
-#     git tag v1.0.0 && git push origin v1.0.0
+#     git tag v2.0.0 && git push origin v2.0.0
 
 name: Build and release packages
 
 on:
   push:
+    branches: [ '**' ]
     tags: [ 'v*' ]
+  pull_request:
   workflow_dispatch:
 
 permissions:
@@ -23,7 +27,81 @@ env:
   SDK_TARGET: 'ipq40xx/generic'      # only the host apk tool is taken from it
 
 jobs:
+  # Everything that can be checked without building a package. It runs first
+  # and the build waits on it, because a package that ships a script with a
+  # syntax error in it is worse than no package at all.
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v7
+
+      - name: Install nftables
+        run: sudo apt-get update -qq && sudo apt-get install -y nftables
+
+      - name: Fetch a core to check against
+        run: |
+          set -euo pipefail
+          sh ./build/build-core.sh x86_64
+          ./prebuilt/x86_64/xray version
+
+      - name: Fetch the routing data the split needs
+        run: |
+          set -euo pipefail
+          # The lite pair, because the tests only need the categories to exist
+          # and the full pair is twenty-five megabytes.
+          mkdir -p geo
+          base=https://raw.githubusercontent.com/Chocolate4U/Iran-v2ray-rules/release
+          curl -fsSL --retry 3 -o geo/geoip.dat   "$base/geoip-lite.dat"
+          curl -fsSL --retry 3 -o geo/geosite.dat "$base/geosite-lite.dat"
+          ls -l geo/
+
+      - name: Run the test suites
+        run: |
+          set -euo pipefail
+          # nft --check needs to talk to the kernel about which modules exist,
+          # and the transparent-proxy probe genuinely loads a throwaway table.
+          sudo -E env \
+            RIG_XRAY="$PWD/prebuilt/x86_64/xray" \
+            OVPN_GEO_DIR="$PWD/geo" \
+            PATH="$PATH" \
+            sh test/run.sh
+
+      # Separate from the suites above because it depends on somebody else's
+      # server list being up this morning, which is not a reason to fail a
+      # build. It is here because it is the only check that reads what the
+      # world is actually publishing today rather than a fixture written
+      # months ago - a subscription that changes shape shows up here first.
+      - name: Read the live list (informational)
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          sub=$(sed -n "s/.*option url '\(https[^']*\)'.*/\1/p" \
+                package/ovpn/files/ovpn.config | head -1)
+          echo "source: $sub"
+          curl -fsSL --retry 3 -o live.txt "$sub"
+          echo "lines: $(grep -c . live.txt)"
+          LC_ALL=C awk -f package/ovpn/files/ovpn-parse < live.txt > live.tsv
+          echo "parsed: $(wc -l < live.tsv) servers"
+          test "$(wc -l < live.tsv)" -gt 0
+          cut -f3 live.tsv | sort | uniq -c | sort -rn
+
+          # Every single one, in front of the binary that would have to run it.
+          rej=0
+          while IFS=$'\t' read -r tag label proto host port payload; do
+            case "$proto" in hysteria2|tuic) continue ;; esac
+            printf '{"log":{"loglevel":"none"},"outbounds":[%s]}' \
+              "$(printf '%s' "$payload" | sed 's/^{/{"tag":"proxy",/')" > one.json
+            if ! ./prebuilt/x86_64/xray run -test -config one.json >one.err 2>&1; then
+              rej=$((rej+1))
+              echo "::warning::today's list has a server the core will not accept: $proto $host:$port"
+              grep -o 'common/errors:.*' one.err | tail -1 | cut -c1-160 || true
+            fi
+          done < live.tsv
+          echo "rejected by the core: $rej of $(wc -l < live.tsv)"
+
   build:
+    needs: test
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -49,62 +127,39 @@ jobs:
           ls -l prebuilt/${{ matrix.openwrt_arch }}/xray
           file prebuilt/${{ matrix.openwrt_arch }}/xray
 
-      - name: Smoke test the core
+      - name: Start it for real
         if: matrix.name == 'x86_64'
         run: |
           set -euo pipefail
-          # The runner can execute the x86_64 build, so actually start it. The
-          # cross builds are not runnable here, so without this nothing in the
-          # pipeline would notice a core that cannot run at all.
-          ./prebuilt/x86_64/xray version
-
-      - name: Check the parser and the configuration it feeds
-        if: matrix.name == 'x86_64'
-        run: |
-          set -euo pipefail
-          # The list address lives in exactly one file and stays there, so
-          # read it back out rather than repeating it here.
-          sub=$(grep '^SUB_URL=' package/ovpn/files/ovpn-update | cut -d'"' -f2)
-          curl -fsSL --retry 3 -o list.txt "$sub"
-
-          awk -f package/ovpn/files/ovpn-parse < list.txt > cand.tsv
-          entries=$(grep -c . list.txt || true)
-          parsed=$(wc -l < cand.tsv)
-          echo "== parsed $parsed servers"
-          test "$parsed" -gt 0
-
-          # every outbound the parser emits has to be JSON xray will accept
-          cut -f3 cand.tsv | while read -r o; do
-            echo "$o" | python3 -c 'import json,sys; json.load(sys.stdin)'
-          done
-          echo "== every parsed outbound is valid JSON"
-
-          # and the configuration built around one of them has to satisfy the
-          # very binary that will run it - which is the check that catches a
-          # config that is shaped wrong long before a router does
-          head -1 cand.tsv | cut -f3 > best.json
-          OVPN_BEST="$PWD/best.json" sh package/ovpn/files/ovpn-mkconfig > cfg.json
-          python3 -c 'import json;d=json.load(open("cfg.json"));print("== config tags:", [o["tag"] for o in d["outbounds"]])'
-          ./prebuilt/x86_64/xray run -test -config cfg.json
-          echo "== xray accepts the generated configuration"
-
           # Accepting a configuration and being able to serve it are different
           # things, and the difference is where this went wrong on a real
-          # router: xray read the file, said nothing, stayed alive and never
-          # listened. Start it for real and look for the socket.
+          # router: the core read the file, said nothing, stayed alive and
+          # never listened. So start it and look for the socket.
+          cat > best.json <<'EOF'
+          {"protocol":"freedom"}
+          EOF
+          OVPN_ETC="$PWD" OVPN_RUN="$PWD" sh package/ovpn/files/ovpn-mkconfig > cfg.json
+          ./prebuilt/x86_64/xray run -test -config cfg.json
           sudo ./prebuilt/x86_64/xray run -config cfg.json > xray.log 2>&1 &
           xpid=$!
           for i in $(seq 1 15); do
-            if ss -lntu 2>/dev/null | grep -qE '[:.](1082|1053)[[:space:]]'; then break; fi
+            if ss -lntu 2>/dev/null | grep -qE '[:.](1082|1053|10853)[[:space:]]'; then break; fi
             sleep 1
           done
-          ss -lntu 2>/dev/null | grep -E '[:.](1082|1053)[[:space:]]' || {
-            echo "::error::xray started but never listened"
-            echo "--- xray said:"; cat xray.log
+          ss -lntu 2>/dev/null | grep -E '[:.](1082|1053|10853)[[:space:]]' || {
+            echo "::error::the core started but never listened"
+            echo "--- it said:"; cat xray.log
             sudo kill $xpid 2>/dev/null || true
             exit 1
           }
-          echo "== xray listens on the tproxy and dns ports"
+          echo "== listening on the transparent proxy, DNS and stats ports"
+
+          # And the stats interface has to answer, because the traffic page
+          # reads it and a silent failure there shows zero for ever.
+          ./prebuilt/x86_64/xray api statsquery --server=127.0.0.1:10853 \
+            | grep -q 'outbound>>>proxy>>>traffic' \
+            || { echo "::error::the stats interface did not answer"; exit 1; }
+          echo "== the stats interface answers"
           sudo kill $xpid 2>/dev/null || true
 
       - name: Fetch the apk tool from an OpenWrt SDK
@@ -146,20 +201,39 @@ jobs:
 
           rm -rf verify && mkdir -p verify/apk verify/ipk
           "$APK_BIN" extract --destination verify/apk --allow-untrusted --no-chown dist/ovpn-*.apk
-          test -x verify/apk/usr/libexec/ovpn/xray
-          file verify/apk/usr/libexec/ovpn/xray
 
           tar -xzf dist/ovpn_*_${{ matrix.openwrt_arch }}.ipk -C verify/ipk
           mkdir -p verify/ipk/data verify/ipk/control
           tar -xzf verify/ipk/data.tar.gz -C verify/ipk/data
           tar -xzf verify/ipk/control.tar.gz -C verify/ipk/control
-          test -x verify/ipk/data/usr/libexec/ovpn/xray
-          file verify/ipk/data/usr/libexec/ovpn/xray
           grep -qx "Architecture: ${{ matrix.openwrt_arch }}" verify/ipk/control/control
 
-          # The web interface is a separate package and was going out
-          # unchecked: a menu file that never reached the router looks
-          # exactly like a green build.
+          # Everything that has to be runnable, in both formats. A helper
+          # shipped without its executable bit is a package that installs
+          # perfectly and then does nothing at all.
+          for base in verify/apk verify/ipk/data; do
+            test -x "$base/usr/libexec/ovpn/xray"
+            test -x "$base/etc/init.d/ovpn"
+            test -x "$base/usr/libexec/rpcd/luci.ovpn"
+            for s in $(sed -n 's/^OVPN_SCRIPTS="//p' build/packages.inc.sh | tr -d '"'); do
+              test -x "$base/usr/libexec/$s" || {
+                echo "::error::$base/usr/libexec/$s is not executable"; exit 1; }
+            done
+            test -s "$base/etc/ovpn/version"
+          done
+          echo "== every shipped helper is executable in both formats"
+          file verify/apk/usr/libexec/ovpn/xray
+
+          # The version the web interface shows has to be the version that
+          # was built, not one somebody forgot to bump.
+          want=$(sed -n 's/^VERSION=//p' build/packages.inc.sh)-r$(sed -n 's/^RELEASE=//p' build/packages.inc.sh)
+          got=$(cat verify/apk/etc/ovpn/version)
+          [ "$want" = "$got" ] || { echo "::error::version is $got, expected $want"; exit 1; }
+          echo "== the packaged version is $got"
+
+          # The web interface is a separate package and was once going out
+          # unchecked: a menu file that never reached the router looks exactly
+          # like a green build.
           rm -rf verifyl && mkdir -p verifyl/apk verifyl/ipk
           "$APK_BIN" extract --destination verifyl/apk --allow-untrusted --no-chown dist/luci-app-ovpn-*.apk
           tar -xzf dist/luci-app-ovpn_*_all.ipk -C verifyl/ipk
@@ -167,12 +241,15 @@ jobs:
           for base in verifyl/apk verifyl/ipk/data; do
             test -s "$base/usr/share/luci/menu.d/luci-app-ovpn.json"
             test -s "$base/usr/share/rpcd/acl.d/luci-app-ovpn.json"
-            test -s "$base/www/luci-static/resources/view/ovpn/overview.js"
+            for v in overview nodes settings; do
+              test -s "$base/www/luci-static/resources/view/ovpn/$v.js"
+            done
           done
-          # the menu entry has to name a view the package actually ships
-          view=$(grep -o '"path": *"[^"]*"' verifyl/apk/usr/share/luci/menu.d/luci-app-ovpn.json | cut -d'"' -f4 | head -1)
-          test -s "verifyl/apk/www/luci-static/resources/view/$view.js"
-          echo "== menu points at $view.js, which is in the package"
+          # every menu entry has to name a view the package actually ships
+          for view in $(grep -o '"path": *"[^"]*"' verifyl/apk/usr/share/luci/menu.d/luci-app-ovpn.json | cut -d'"' -f4); do
+            test -s "verifyl/apk/www/luci-static/resources/view/$view.js"
+            echo "== menu entry $view.js is in the package"
+          done
 
           # both formats must ship exactly the same tree
           ( cd verify/apk && find . -type f | grep -v '^./lib/apk' | sort ) > apk.list
