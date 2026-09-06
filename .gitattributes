@@ -1,13 +1,20 @@
-# Everything that runs on the router is a POSIX shell or awk script and must
-# arrive with LF endings. A CRLF checkout makes the kernel report
-# "bad interpreter: /bin/sh^M" and nothing starts.
-*.sh              text eol=lf
-*.init            text eol=lf
-*.awk             text eol=lf
-Makefile          text eol=lf
-package/ovpn/files/*      text eol=lf
-.github/workflows/*.yml   text eol=lf
+# Everything in here ends up on a Linux router or in a Linux build, so
+# everything is stored and checked out with LF - including on Windows.
+#
+# A CRLF checkout of a shell script makes the kernel report
+#
+#     bad interpreter: /bin/sh^M
+#
+# and nothing starts. The blanket rule below is deliberate: the per-extension
+# rules that used to be here covered the service scripts and missed the web
+# interface and the tests, which is exactly the sort of gap that only shows up
+# once somebody has edited a file on the wrong machine.
+* text=auto eol=lf
 
-# the xray binary must never be touched by any filter
+# ...except the things that are not text at all and must never be touched by
+# any filter.
 prebuilt/**       binary
 *.png             binary
+*.dat             binary
+*.ipk             binary
+*.apk             binary
